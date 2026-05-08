@@ -44,8 +44,9 @@ const App: React.FC = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [isSmartPlanning, setIsSmartPlanning] = useState(false);
   const [lastSaved, setLastSaved] = useState<number | null>(null);
-  const [newSong, setNewSong] = useState<Partial<Song>>({ title: '', artist: '' });
+  const [newSong, setNewSong] = useState<Partial<Song>>({ title: '', artist: '', vocalist: '' });
   const [isLibraryExpanded, setIsLibraryExpanded] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Load from LocalStorage on mount
   useLayoutEffect(() => {
@@ -201,6 +202,19 @@ const App: React.FC = () => {
       const details = await getSongDetails(newSong.title);
       setNewSong(prev => ({ ...prev, ...details }));
     } catch (error) { console.error(error); } finally { setIsScanning(false); }
+  };
+
+  const getFilteredLibrarySongs = () => {
+    if (!searchQuery.trim()) return data.columns.pool.songIds;
+    const query = searchQuery.toLowerCase();
+    return data.columns.pool.songIds.filter(id => {
+      const song = data.songs[id];
+      return song && (
+        song.title.toLowerCase().includes(query) ||
+        song.artist.toLowerCase().includes(query) ||
+        (song.vocalist && song.vocalist.toLowerCase().includes(query))
+      );
+    });
   };
 
   const updateSetlistCount = (count: number) => {
@@ -391,12 +405,19 @@ const App: React.FC = () => {
                  <h2 className="text-sm font-black uppercase tracking-widest text-indigo-400">Song Library</h2>
                  <button onClick={() => setIsLibraryExpanded(false)} className="p-2 bg-gray-800 rounded-lg"><X className="w-5 h-5" /></button>
               </div>
+              <input
+                type="text"
+                placeholder="Search songs..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+              />
               <div className="flex-[3] overflow-hidden flex flex-col min-h-0">
-                <SetlistColumn 
-                  column={data.columns['pool']} 
-                  songs={data.columns['pool'].songIds.map(id => data.songs[id]).filter((s): s is Song => !!s)} 
-                  onOptimize={handleOptimize} 
-                  isOptimizing={optimizingCol === 'pool'} 
+                <SetlistColumn
+                  column={data.columns['pool']}
+                  songs={getFilteredLibrarySongs().map(id => data.songs[id]).filter((s): s is Song => !!s)}
+                  onOptimize={handleOptimize}
+                  isOptimizing={optimizingCol === 'pool'}
                   onAddSong={() => setIsAddModalOpen(true)}
                   onUpdateSong={handleUpdateSong}
                   className="flex-1 min-h-0"
@@ -444,11 +465,12 @@ const App: React.FC = () => {
           <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-gray-800 flex items-center justify-between bg-gray-800/20">
               <h2 className="text-xs sm:text-sm font-black text-white flex items-center gap-2 uppercase tracking-tighter"><Plus className="w-4 h-4 text-indigo-500" /> New Song</h2>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-gray-500 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
+              <button onClick={() => { setIsAddModalOpen(false); setNewSong({ title: '', artist: '', vocalist: '' }); }} className="text-gray-500 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={(e) => {
               e.preventDefault();
               handleDataLoaded([{ ...newSong, id: `manual-${Date.now()}`, rating: 0, isExcludedFromAuto: false } as Song]);
+              setNewSong({ title: '', artist: '', vocalist: '' });
               setIsAddModalOpen(false);
             }} className="p-5 sm:p-6 space-y-4">
               <div className="flex gap-2">
@@ -466,6 +488,10 @@ const App: React.FC = () => {
                 <div>
                   <label className="text-[8px] sm:text-[9px] font-black text-gray-500 uppercase mb-1 block">Year</label>
                   <input type="number" className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none" value={newSong.year || ''} onChange={e => setNewSong({...newSong, year: parseInt(e.target.value)})} />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[8px] sm:text-[9px] font-black text-gray-500 uppercase mb-1 block">Vocalist</label>
+                  <input className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none" value={newSong.vocalist || ''} onChange={e => setNewSong({...newSong, vocalist: e.target.value})} />
                 </div>
               </div>
               <button type="submit" className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-black text-[9px] sm:text-[10px] uppercase shadow-lg shadow-indigo-600/20 mt-4">Add to Library</button>
