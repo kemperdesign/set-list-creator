@@ -109,7 +109,7 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
       </div>
 
       {/* Droppable Area with Scrollbar */}
-      <div className="flex-1 overflow-y-auto no-scrollbar p-2">
+      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-900 p-2">
         <Droppable droppableId={column.id} isDropDisabled={isDropDisabled}>
           {(provided, snapshot) => (
             <div
