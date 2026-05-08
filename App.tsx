@@ -413,27 +413,30 @@ const App: React.FC = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:ring-1 focus:ring-indigo-500 outline-none"
               />
-              <div className="flex-[3] overflow-hidden flex flex-col min-h-0">
-                <SetlistColumn
-                  column={data.columns['pool']}
-                  songs={getFilteredLibrarySongs().map(id => data.songs[id]).filter((s): s is Song => !!s)}
-                  onOptimize={handleOptimize}
-                  isOptimizing={optimizingCol === 'pool'}
-                  onAddSong={() => setIsAddModalOpen(true)}
-                  onUpdateSong={handleUpdateSong}
-                  className="flex-1 min-h-0"
-                />
-              </div>
-              <div className="flex-1 min-h-[140px] sm:min-h-[160px] flex flex-col">
-                <SetlistColumn 
-                  column={data.columns['excluded']} 
-                  songs={data.columns['excluded'].songIds.map(id => data.songs[id]).filter((s): s is Song => !!s)} 
-                  onOptimize={handleOptimize} 
-                  isOptimizing={false} 
-                  onUpdateSong={handleUpdateSong}
-                  className="flex-1"
-                />
-              </div>
+              <PanelGroup direction="vertical" className="flex-1 overflow-hidden min-h-0">
+                <Panel defaultSize={60} minSize={20} maxSize={80} className="overflow-hidden">
+                  <SetlistColumn
+                    column={data.columns['pool']}
+                    songs={getFilteredLibrarySongs().map(id => data.songs[id]).filter((s): s is Song => !!s)}
+                    onOptimize={handleOptimize}
+                    isOptimizing={optimizingCol === 'pool'}
+                    onAddSong={() => setIsAddModalOpen(true)}
+                    onUpdateSong={handleUpdateSong}
+                    className="h-full"
+                  />
+                </Panel>
+                <PanelResizeHandle className="h-1 bg-gray-800 hover:bg-indigo-500 transition-colors" />
+                <Panel defaultSize={40} minSize={15} maxSize={80} className="overflow-hidden">
+                  <SetlistColumn
+                    column={data.columns['excluded']}
+                    songs={data.columns['excluded'].songIds.map(id => data.songs[id]).filter((s): s is Song => !!s)}
+                    onOptimize={handleOptimize}
+                    isOptimizing={false}
+                    onUpdateSong={handleUpdateSong}
+                    className="h-full"
+                  />
+                </Panel>
+              </PanelGroup>
             </Panel>
 
             <PanelResizeHandle className="w-1 bg-gray-800 hover:bg-indigo-500 transition-colors hidden lg:block" />
