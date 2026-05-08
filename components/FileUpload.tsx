@@ -62,7 +62,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onDataLoaded }) => {
   };
 
   const parseCSV = (csvText: string): Song[] => {
-    const lines = csvText.split('\n').filter(line => line.trim() !== '');
+    // Remove BOM if present
+    const cleanText = csvText.replace(/^﻿/, '');
+    const lines = cleanText.split('\n').filter(line => line.trim() !== '');
     if (lines.length < 2) return [];
     const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
     const titleIdx = headers.findIndex(h => h.includes('title') || h.includes('song') || h.includes('name'));
