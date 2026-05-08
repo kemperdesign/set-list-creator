@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback, useLayoutEffect, useEffect } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
+import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 import { BoardData, Song, GeneratorConfig, EraPreference, SetlistSnapshot } from './types';
 import SetlistColumn from './components/SetlistColumn';
 import FileUpload from './components/FileUpload';
@@ -394,11 +395,11 @@ const App: React.FC = () => {
                <FileUpload onDataLoaded={handleDataLoaded} />
           </div>
         ) : (
-          <div className="flex flex-col lg:flex-row gap-4 sm:gap-6 flex-1 overflow-hidden h-full">
+          <PanelGroup direction="horizontal" className="flex-1 overflow-hidden h-full">
             {/* Library Sidebar - Collapsible on Mobile */}
-            <div className={`
+            <Panel defaultSize={25} minSize={15} maxSize={40} className={`
               ${isLibraryExpanded ? 'flex' : 'hidden'} lg:flex
-              lg:w-72 xl:w-80 flex-shrink-0 flex-col gap-4 overflow-hidden 
+              flex-col gap-4 overflow-hidden
               fixed inset-0 z-50 bg-gray-950 p-4 lg:p-0 lg:static lg:bg-transparent
             `}>
               <div className="flex items-center justify-between lg:hidden mb-2">
@@ -433,10 +434,12 @@ const App: React.FC = () => {
                   className="flex-1"
                 />
               </div>
-            </div>
+            </Panel>
+
+            <PanelResizeHandle className="w-1 bg-gray-800 hover:bg-indigo-500 transition-colors hidden lg:block" />
 
             {/* Setlists Main Row - Horizontal Scrollable */}
-            <div className="flex-1 overflow-x-auto pb-4 sm:pb-6 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
+            <Panel defaultSize={75} minSize={60} className="overflow-x-auto pb-4 sm:pb-6 scrollbar-thin scrollbar-thumb-gray-800 scrollbar-track-transparent">
               <div className="flex gap-4 sm:gap-6 h-full items-start">
                   {data.columnOrder.filter(id => id.startsWith('setlist')).map(colId => {
                       const col = data.columns[colId];
@@ -454,8 +457,8 @@ const App: React.FC = () => {
                       );
                   })}
               </div>
-            </div>
-          </div>
+            </Panel>
+          </PanelGroup>
         )}
       </DragDropContext>
 
