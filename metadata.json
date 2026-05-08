@@ -1,0 +1,5 @@
+{
+  "name": "Set List Generator",
+  "description": "A drag-and-drop setlist manager powered by Gemini. Upload song data via CSV, organize into setlists, and use AI to optimize the track sequencing.",
+  "requestFramePermissions": []
+}
