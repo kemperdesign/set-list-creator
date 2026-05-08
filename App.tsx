@@ -6,10 +6,10 @@ import { BoardData, Song, GeneratorConfig, EraPreference, SetlistSnapshot } from
 import SetlistColumn from './components/SetlistColumn';
 import FileUpload from './components/FileUpload';
 import { optimizeSetlistFlow, getSongDetails, smartDistributeSongs } from './services/geminiService';
-import { 
-  Disc3, FileSpreadsheet, FileText, RotateCcw, Layers, FileJson, X, Plus, 
+import {
+  Disc3, FileSpreadsheet, FileText, RotateCcw, Layers, FileJson, X, Plus,
   Wand2, Sparkles, Loader2, Music2, Users2, History, Save, Trash2, CheckCircle2,
-  ChevronLeft, ChevronRight, Menu
+  ChevronLeft, ChevronRight, ChevronDown, Menu
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -48,6 +48,7 @@ const App: React.FC = () => {
   const [newSong, setNewSong] = useState<Partial<Song>>({ title: '', artist: '', vocalist: '' });
   const [isLibraryExpanded, setIsLibraryExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSnapshotDropdownOpen, setIsSnapshotDropdownOpen] = useState(false);
 
   // Load from LocalStorage on mount
   useLayoutEffect(() => {
@@ -377,14 +378,46 @@ const App: React.FC = () => {
             </button>
           </div>
 
-          <button 
-            onClick={handleSmartPlan}
-            disabled={isSmartPlanning}
-            className="px-4 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg font-black text-[9px] uppercase shadow-lg shadow-indigo-500/10 flex items-center justify-center gap-1.5 disabled:opacity-50 flex-shrink-0"
-          >
-            {isSmartPlanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-            Generate Sets
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={handleSmartPlan}
+              disabled={isSmartPlanning}
+              className="px-4 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg font-black text-[9px] uppercase shadow-lg shadow-indigo-500/10 flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              {isSmartPlanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              Generate Sets
+            </button>
+
+            {/* Snapshots Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setIsSnapshotDropdownOpen(!isSnapshotDropdownOpen)}
+                disabled={data.history.length === 0}
+                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-indigo-400 rounded-lg font-black text-[9px] uppercase shadow-lg border border-gray-700 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronDown className="w-3 h-3" />
+                Setlists
+              </button>
+
+              {isSnapshotDropdownOpen && data.history.length > 0 && (
+                <div className="absolute top-full right-0 mt-1 w-56 bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-40 max-h-64 overflow-y-auto">
+                  {data.history.map(snap => (
+                    <button
+                      key={snap.id}
+                      onClick={() => {
+                        loadSnapshot(snap);
+                        setIsSnapshotDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-800 border-b border-gray-800 last:border-b-0 transition-colors"
+                    >
+                      <p className="text-xs font-semibold text-white truncate">{snap.name}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">{new Date(snap.timestamp).toLocaleDateString()}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
