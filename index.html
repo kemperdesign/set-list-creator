@@ -2,15 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover lets the app use the full iPhone screen; the app pads for the notch/home bar itself -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#030712" />
+    <!-- "Add to Home Screen" on iPhone opens it full screen like an app -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Set Lists" />
+    <meta name="format-detection" content="telephone=no" />
     <title>Set List Generator</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+      html, body, #root {
+        min-height: 100%;
+      }
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #0f172a;
+        background-color: #030712;
         color: #f8fafc;
+        margin: 0;
+        -webkit-text-size-adjust: 100%;
+        -webkit-tap-highlight-color: transparent;
+        overscroll-behavior-y: none;
+      }
+      button, [role="button"], a, label {
+        touch-action: manipulation;
       }
       .no-scrollbar::-webkit-scrollbar {
         display: none;
@@ -34,11 +52,20 @@
         background-color: #4f46e5;
         color: white;
       }
+      /* iOS Safari zooms the page when a focused field is under 16px. Keep fields at 16px on phones/tablets. */
+      @media (max-width: 1023px) {
+        input, select, textarea {
+          font-size: 16px !important;
+        }
+      }
       [data-panel-group-direction="horizontal"] > [data-panel-group-context] {
         display: flex;
       }
       [data-panel]:focus-visible {
         outline: none;
+      }
+      @media print {
+        body { background: #fff; }
       }
     </style>
   </head>

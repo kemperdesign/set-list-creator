@@ -1,125 +1,172 @@
 
 import React, { useRef, useState } from 'react';
 import { Song } from '../types';
-import { Upload, AlertCircle, Wand2, FileJson } from 'lucide-react';
+import { Upload, AlertCircle, Wand2, Download, CheckCircle2, FileSpreadsheet } from 'lucide-react';
 import { generateSampleData } from '../services/geminiService';
+import { buildTemplateCsv, downloadTextFile, parseSongsCsv, parseSongsJson, ImportResult } from '../lib/csv';
+import { titleKey } from '../lib/boardData';
 
 interface FileUploadProps {
   onDataLoaded: (songs: Song[]) => void;
+  /** Titles already in the library (via titleKey) so the preview can say what will be skipped. */
+  existingTitles?: Set<string>;
+  /** Hide the "generate sample library" button (used when adding to an existing library). */
+  hideSample?: boolean;
+  onDone?: () => void;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onDataLoaded }) => {
+export const downloadTemplate = () =>
+  downloadTextFile('setlist-import-template.csv', buildTemplateCsv());
+
+const FileUpload: React.FC<FileUploadProps> = ({ onDataLoaded, existingTitles, hideSample, onDone }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [preview, setPreview] = useState<{ fileName: string; result: ImportResult; fresh: Song[]; dupes: number } | null>(null);
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    event.target.value = ''; // allow re-selecting the same file
     if (!file) return;
+    setError(null);
+    setPreview(null);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const text = e.target?.result as string;
-        let parsedSongs: Song[] = [];
+    if (/\.xlsx?$/i.test(file.name)) {
+      setError('Excel files can\'t be read directly. In Excel choose File > Save As > "CSV (Comma delimited)", then upload that file.');
+      return;
+    }
 
-        if (file.name.endsWith('.json')) {
-          parsedSongs = parseJSON(text);
-        } else {
-          parsedSongs = parseCSV(text);
-        }
-
-        if (parsedSongs.length === 0) {
-          setError("No valid songs found. Ensure file contains song data.");
-        } else {
-          setError(null);
-          onDataLoaded(parsedSongs);
-        }
-      } catch (err) {
-        setError("Failed to parse file. Please upload a valid CSV or JSON.");
+    try {
+      const text = await file.text();
+      const result = file.name.toLowerCase().endsWith('.json') ? parseSongsJson(text) : parseSongsCsv(text);
+      if (result.error) { setError(result.error); return; }
+      if (result.songs.length === 0) {
+        setError('No valid songs found. Download the template to see the expected format.');
+        return;
       }
-    };
-    reader.readAsText(file);
+      const have = existingTitles || new Set<string>();
+      const fresh = result.songs.filter(s => !have.has(titleKey(s.title)));
+      setPreview({ fileName: file.name, result, fresh, dupes: result.songs.length - fresh.length });
+    } catch {
+      setError('Failed to read that file. Please upload a valid CSV or JSON.');
+    }
   };
 
-  const parseJSON = (jsonText: string): Song[] => {
-    const data = JSON.parse(jsonText);
-    const items = Array.isArray(data) ? data : (data.songs || []);
-    return items.map((item: any, index: number): Song | null => {
-      const title = item.name || item.title || item.Song;
-      if (!title) return null;
-      return {
-        id: `json-${index}-${Date.now()}`,
-        title: title,
-        artist: item.artist || "Unknown Artist",
-        key: item.key,
-        bpm: item.bpm ? parseInt(item.bpm) : undefined,
-        duration: item.duration,
-        vocalist: item.vocalist,
-        year: item.year ? parseInt(item.year) : undefined
-      };
-    }).filter((s: any): s is Song => s !== null);
-  };
-
-  const parseCSV = (csvText: string): Song[] => {
-    // Remove BOM if present
-    const cleanText = csvText.replace(/^﻿/, '');
-    const lines = cleanText.split('\n').filter(line => line.trim() !== '');
-    if (lines.length < 2) return [];
-    const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
-    const titleIdx = headers.findIndex(h => h.includes('title') || h.includes('song') || h.includes('name'));
-    const artistIdx = headers.findIndex(h => h.includes('artist'));
-    const yearIdx = headers.findIndex(h => h.includes('year') || h.includes('date') || h.includes('released'));
-    const bpmIdx = headers.findIndex(h => h.includes('bpm'));
-    const vocalistIdx = headers.findIndex(h => h.includes('vocal') || h.includes('singer'));
-
-    if (titleIdx === -1) return [];
-
-    return lines.slice(1).map((line, index): Song | null => {
-      const values = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/^["']|["']$/g, ''));
-      if (values.length < 1) return null;
-      const title = values[titleIdx];
-      if (!title) return null;
-      return {
-        id: `csv-${index}-${Date.now()}`,
-        title,
-        artist: artistIdx !== -1 ? values[artistIdx] : "Unknown Artist",
-        year: yearIdx !== -1 ? parseInt(values[yearIdx].replace(/[^0-9]/g, '')) || undefined : undefined,
-        bpm: bpmIdx !== -1 ? parseInt(values[bpmIdx].replace(/[^0-9]/g, '')) || undefined : undefined,
-        vocalist: vocalistIdx !== -1 ? values[vocalistIdx] : undefined,
-      };
-    }).filter((s): s is Song => s !== null);
+  const confirmImport = () => {
+    if (!preview) return;
+    onDataLoaded(preview.fresh);
+    setPreview(null);
+    onDone?.();
   };
 
   const handleGenerate = async () => {
     setIsGenerating(true);
+    setError(null);
     try {
       const songs = await generateSampleData();
+      if (songs.length === 0) { setError('Could not generate a sample library right now.'); return; }
       onDataLoaded(songs);
-    } catch (e) {
-      setError("Failed to generate sample data.");
+      onDone?.();
+    } catch {
+      setError('Failed to generate sample data.');
     } finally {
       setIsGenerating(false);
     }
   };
 
   return (
-    <div className="w-full max-w-xl mx-auto p-6 bg-gray-800 rounded-xl border border-gray-700 shadow-xl mb-8">
-      <div className="text-center mb-6">
-        <h2 className="text-xl font-bold text-white mb-2">Import Your Library</h2>
-        <p className="text-gray-400 text-sm">Upload a CSV or JSON file containing your song list</p>
+    <div className="w-full max-w-xl mx-auto p-4 sm:p-6 bg-gray-800 rounded-xl border border-gray-700 shadow-xl">
+      <div className="text-center mb-5">
+        <h2 className="text-lg sm:text-xl font-bold text-white mb-1">Import Your Songs</h2>
+        <p className="text-gray-400 text-sm">Upload a CSV or JSON file with your song list. Keys, durations and lyrics are supported.</p>
       </div>
-      <div className="flex flex-col gap-4">
-        <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-gray-600 hover:border-indigo-500 hover:bg-gray-700/50 transition-all rounded-lg p-8 cursor-pointer flex flex-col items-center justify-center group">
-          <Upload className="w-10 h-10 text-gray-400 group-hover:text-indigo-400 transition-colors mb-2" />
-          <span className="text-gray-300 font-medium group-hover:text-white">Click to Upload CSV or JSON</span>
-          <input type="file" accept=".csv,.json" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
-        </div>
-        <button onClick={handleGenerate} disabled={isGenerating} className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50">
-          {isGenerating ? <span className="animate-pulse">Generative Magic...</span> : <><Wand2 className="w-4 h-4" /> Generate Sample Library</>}
+
+      <div className="flex flex-col gap-3">
+        <button
+          onClick={downloadTemplate}
+          className="w-full py-3 bg-gray-900 hover:bg-gray-700 border border-gray-600 text-gray-100 rounded-lg font-medium flex items-center justify-center gap-2 transition-all"
+        >
+          <Download className="w-4 h-4 text-emerald-400" /> Download CSV Template
         </button>
+
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          className="border-2 border-dashed border-gray-600 hover:border-indigo-500 hover:bg-gray-700/50 transition-all rounded-lg p-6 cursor-pointer flex flex-col items-center justify-center group"
+        >
+          <Upload className="w-9 h-9 text-gray-400 group-hover:text-indigo-400 transition-colors mb-2" />
+          <span className="text-gray-300 font-medium group-hover:text-white text-center">Tap to choose your filled-in CSV or JSON</span>
+          <input
+            type="file"
+            accept=".csv,.json,text/csv,application/json,text/plain"
+            ref={fileInputRef}
+            className="hidden"
+            onChange={handleFile}
+          />
+        </div>
+
+        {!hideSample && (
+          <button
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+          >
+            {isGenerating ? <span className="animate-pulse">Generative Magic...</span> : <><Wand2 className="w-4 h-4" /> Generate Sample Library</>}
+          </button>
+        )}
       </div>
-      {error && <div className="mt-4 p-3 bg-red-900/50 border border-red-700 text-red-200 rounded-lg flex items-center gap-2 text-sm"><AlertCircle className="w-4 h-4" /> {error}</div>}
+
+      {preview && (
+        <div className="mt-4 p-3 bg-gray-900 border border-emerald-700/50 rounded-lg space-y-3">
+          <div className="flex items-start gap-2">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+            <div className="text-sm text-gray-200 min-w-0">
+              <p className="font-semibold truncate">{preview.fileName}</p>
+              <p className="text-gray-400 text-xs mt-0.5">
+                {preview.fresh.length} new song{preview.fresh.length === 1 ? '' : 's'} ready
+                {preview.dupes > 0 && ` · ${preview.dupes} already in your library (skipped)`}
+                {preview.result.skipped.length > 0 && ` · ${preview.result.skipped.length} row${preview.result.skipped.length === 1 ? '' : 's'} skipped`}
+              </p>
+            </div>
+          </div>
+
+          {preview.fresh.length > 0 && (
+            <ul className="text-xs text-gray-400 max-h-32 overflow-y-auto space-y-0.5 pl-6 list-disc">
+              {preview.fresh.slice(0, 8).map(s => (
+                <li key={s.id} className="truncate">
+                  <span className="text-gray-200">{s.title}</span> – {s.artist}{s.key ? ` · ${s.key}` : ''}{s.duration ? ` · ${s.duration}` : ''}
+                </li>
+              ))}
+              {preview.fresh.length > 8 && <li className="list-none text-gray-500">…and {preview.fresh.length - 8} more</li>}
+            </ul>
+          )}
+
+          {preview.result.skipped.length > 0 && (
+            <p className="text-[11px] text-amber-400/90">
+              Skipped: {preview.result.skipped.slice(0, 3).map(s => `row ${s.row} (${s.reason})`).join(', ')}
+              {preview.result.skipped.length > 3 ? '…' : ''}
+            </p>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={() => setPreview(null)} className="flex-1 py-2.5 text-xs font-bold uppercase text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg">
+              Cancel
+            </button>
+            <button
+              onClick={confirmImport}
+              disabled={preview.fresh.length === 0}
+              className="flex-[2] py-2.5 text-xs font-bold uppercase text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-lg flex items-center justify-center gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Import {preview.fresh.length} song{preview.fresh.length === 1 ? '' : 's'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-4 p-3 bg-red-900/50 border border-red-700 text-red-200 rounded-lg flex items-start gap-2 text-sm">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" /> <span>{error}</span>
+        </div>
+      )}
     </div>
   );
 };

@@ -3,7 +3,7 @@ import React from 'react';
 import { Droppable } from '@hello-pangea/dnd';
 import { SetlistColumn as ColumnType, Song } from '../types';
 import SongCard from './SongCard';
-import { Sparkles, Plus, Clock, Target } from 'lucide-react';
+import { Sparkles, Plus, Clock, Target, Music } from 'lucide-react';
 
 interface SetlistColumnProps {
   column: ColumnType;
@@ -14,18 +14,28 @@ interface SetlistColumnProps {
   onAddSong?: () => void;
   onUpdateTargetDuration?: (columnId: string, duration: number) => void;
   onUpdateSong?: (songId: string, updates: Partial<Song>) => void;
+  onOpenSong?: (songId: string) => void;
+  /** Reorders the set so songs in the same key sit together (fewer instrument changes). */
+  onGroupKeys?: (columnId: string) => void;
+  /** How many key changes the current order has (shown next to the button). */
+  keyChanges?: number;
+  mobile?: boolean;
   className?: string;
 }
 
-const SetlistColumn: React.FC<SetlistColumnProps> = ({ 
-  column, 
-  songs, 
-  isDropDisabled, 
+const SetlistColumn: React.FC<SetlistColumnProps> = ({
+  column,
+  songs,
+  isDropDisabled,
   onOptimize,
   isOptimizing,
   onAddSong,
   onUpdateTargetDuration,
   onUpdateSong,
+  onOpenSong,
+  onGroupKeys,
+  keyChanges,
+  mobile,
   className
 }) => {
   // Defensive duration calculation: handle potential undefined song objects
@@ -33,13 +43,14 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
     if (!song) return acc;
     if (song.duration && song.duration.includes(':')) {
       const [m, s] = song.duration.split(':').map(Number);
-      return acc + m + (s / 60);
+      if (Number.isFinite(m) && Number.isFinite(s)) return acc + m + (s / 60);
     }
     return acc + 3.5; // Default estimate
   }, 0));
 
   const isOver = column.targetDuration && currentDuration > column.targetDuration;
   const progress = column.targetDuration ? (currentDuration / column.targetDuration) * 100 : 0;
+  const isSet = column.id !== 'pool' && column.id !== 'excluded';
 
   return (
     <div className={`flex flex-col bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden ${className || column.className || 'h-full min-h-[400px]'}`}>
@@ -49,12 +60,12 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-gray-100 text-sm">{column.title}</h3>
             {column.id === 'pool' && onAddSong && (
-               <button 
+               <button
                 onClick={onAddSong}
-                className="p-1 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white transition-colors"
+                className={`${mobile ? 'p-2' : 'p-1'} hover:bg-gray-700 rounded-full text-gray-400 hover:text-white transition-colors`}
                 title="Add song manually"
                >
-                 <Plus className="w-3.5 h-3.5" />
+                 <Plus className={mobile ? 'w-4 h-4' : 'w-3.5 h-3.5'} />
                </button>
             )}
           </div>
@@ -62,7 +73,7 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
             {songs.length}
           </span>
         </div>
-        
+
         <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
                  <div className={`text-[11px] font-medium flex items-center gap-1 ${isOver ? 'text-amber-400' : 'text-gray-400'}`}>
@@ -70,14 +81,15 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
                     {currentDuration}m
                     {column.targetDuration ? <span className="opacity-50 text-[10px]">/ {column.targetDuration}m</span> : ''}
                  </div>
-                 
-                 {column.id !== 'pool' && column.id !== 'excluded' && onUpdateTargetDuration && (
+
+                 {isSet && onUpdateTargetDuration && (
                     <div className="flex items-center gap-1 bg-gray-950/50 border border-gray-800 rounded px-1.5 py-0.5 group focus-within:ring-1 focus-within:ring-indigo-500">
                         <Target className="w-3 h-3 text-gray-500 group-focus-within:text-indigo-400" />
-                        <input 
-                            type="number" 
+                        <input
+                            type="number"
+                            inputMode="numeric"
                             placeholder="Set mins"
-                            className="w-8 bg-transparent border-none text-[10px] text-indigo-300 placeholder-gray-700 focus:outline-none focus:ring-0 p-0"
+                            className="w-9 bg-transparent border-none text-[10px] text-indigo-300 placeholder-gray-700 focus:outline-none focus:ring-0 p-0"
                             value={column.targetDuration || ''}
                             onChange={(e) => onUpdateTargetDuration(column.id, parseInt(e.target.value) || 0)}
                         />
@@ -85,45 +97,71 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
                     </div>
                  )}
             </div>
-            
+
             {column.targetDuration ? (
                 <div className="h-1 w-full bg-gray-800 rounded-full overflow-hidden">
-                    <div 
+                    <div
                         className={`h-full transition-all duration-500 ${isOver ? 'bg-amber-500' : 'bg-indigo-500'}`}
                         style={{ width: `${Math.min(progress, 100)}%` }}
                     />
                 </div>
             ) : null}
 
-             {column.id !== 'pool' && songs.length >= 2 && (
-                 <button 
+             {isSet && songs.length >= 2 && (
+               <div className="flex gap-1.5 mt-1">
+                 <button
                     onClick={() => onOptimize(column.id)}
                     disabled={isOptimizing}
-                    className="w-full mt-1 py-1 text-[10px] flex items-center justify-center gap-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 rounded transition-all disabled:opacity-50"
+                    className={`flex-1 ${mobile ? 'py-2 text-xs' : 'py-1 text-[10px]'} flex items-center justify-center gap-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 rounded transition-all disabled:opacity-50`}
                  >
                     <Sparkles className={`w-2.5 h-2.5 ${isOptimizing ? 'animate-spin' : ''}`} />
-                    {isOptimizing ? 'Optimizing Flow...' : 'Auto-Optimize Flow'}
+                    {isOptimizing ? 'Optimizing…' : 'Auto-Optimize Flow'}
                  </button>
+                 {onGroupKeys && (
+                   <button
+                      onClick={() => onGroupKeys(column.id)}
+                      className={`${mobile ? 'py-2 px-3 text-xs' : 'py-1 px-2 text-[10px]'} flex items-center justify-center gap-1 bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20 border border-fuchsia-500/20 rounded transition-all`}
+                      title="Group songs in the same key together to reduce instrument changes"
+                   >
+                      <Music className="w-2.5 h-2.5" />
+                      Group keys{typeof keyChanges === 'number' ? ` (${keyChanges})` : ''}
+                   </button>
+                 )}
+               </div>
              )}
         </div>
       </div>
 
       {/* Droppable Area with Scrollbar */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-900 p-2">
+      <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-900 p-2">
         <Droppable droppableId={column.id} isDropDisabled={isDropDisabled}>
           {(provided, snapshot) => (
             <div
               ref={provided.innerRef}
               {...provided.droppableProps}
               className={`
-                min-h-[100px] rounded-lg transition-colors p-1
+                min-h-[100px] pb-24 rounded-lg transition-colors p-1
                 ${snapshot.isDraggingOver ? 'bg-gray-800/30 ring-2 ring-inset ring-indigo-500/10' : ''}
               `}
             >
               {songs.map((song, index) => (
-                song && <SongCard key={song.id} song={song} index={index} onUpdateSong={onUpdateSong} />
+                song && (
+                  <SongCard
+                    key={song.id}
+                    song={song}
+                    index={index}
+                    onUpdateSong={onUpdateSong}
+                    onOpenSong={onOpenSong}
+                    mobile={mobile}
+                  />
+                )
               ))}
               {provided.placeholder}
+              {songs.length === 0 && !snapshot.isDraggingOver && (
+                <p className="text-center text-xs text-gray-600 py-6">
+                  {isSet ? 'Empty. Move songs here from the Library.' : 'No songs here.'}
+                </p>
+              )}
             </div>
           )}
         </Droppable>
