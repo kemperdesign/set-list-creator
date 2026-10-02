@@ -7,7 +7,7 @@ import FileUpload, { downloadTemplate } from './FileUpload';
 import SongSheet from './SongSheet';
 import Sheet from './Sheet';
 import ShareBandDialog from './ShareBandDialog';
-import { optimizeSetlistFlow, getSongDetails, smartDistributeSongs } from '../services/geminiService';
+import { optimizeSetlistFlow, getSongDetails, enrichSongs, describeAiError, smartDistributeSongs } from '../services/geminiService';
 import { supabase } from '../lib/supabase';
 import { STORAGE_KEY, makeInitialData, normalizeBoard, titleKey, uid } from '../lib/boardData';
 import { useDialogs } from '../lib/useDialogs';
@@ -57,6 +57,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
   const [optimizingCol, setOptimizingCol] = useState<string | null>(null);
   const [isSmartPlanning, setIsSmartPlanning] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isEnriching, setIsEnriching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<string>('pool');
 
@@ -411,13 +412,85 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     }
   }, [data]);
 
+  // Keeps only the fields that are currently empty, and only values that look valid.
+  const pickMissing = (song: Partial<Song>, found: Partial<Song>): Partial<Song> => {
+    const out: Partial<Song> = {};
+    const artist = (found.artist || '').trim();
+    if (artist && (!song.artist || song.artist.trim() === '' || /^unknown artist$/i.test(song.artist.trim()))) out.artist = artist;
+    const key = formatKey(found.key);
+    if (key && !formatKey(song.key)) out.key = key;
+    const bpm = Math.round(Number(found.bpm));
+    if (!song.bpm && bpm >= 30 && bpm <= 300) out.bpm = bpm;
+    const dur = normalizeDuration(found.duration);
+    if (dur && !song.duration) out.duration = dur;
+    const year = Math.round(Number(found.year));
+    if (!song.year && year >= 1900 && year <= 2035) out.year = year;
+    return out;
+  };
+
+  const hasGaps = (s: Song) =>
+    !s.artist || /^unknown artist$/i.test(s.artist.trim()) || !formatKey(s.key) || !s.bpm || !s.duration || !s.year;
+
+  /** AI fill for the Add Song form: only touches fields you left empty. */
   const handleMagicScan = async () => {
-    if (!newSong.title) return;
+    if (!newSong.title?.trim()) {
+      await showAlert('Enter a title first', 'Type the song title, then tap the sparkle to fill in the rest.');
+      return;
+    }
     setIsScanning(true);
     try {
-      const details = await getSongDetails(newSong.title);
-      setNewSong(prev => ({ ...prev, ...details, key: formatKey(details.key) || prev.key, duration: normalizeDuration(details.duration) || prev.duration }));
-    } catch (error) { console.error(error); } finally { setIsScanning(false); }
+      const found = await getSongDetails(newSong.title.trim(), newSong.artist?.trim());
+      const fill = pickMissing(newSong, found);
+      if (Object.keys(fill).length === 0) {
+        await showAlert('Nothing to fill in', 'The AI had nothing new to add. Either every field is already filled in or it was not confident about this song.');
+      } else {
+        setNewSong(prev => ({ ...prev, ...fill }));
+      }
+    } catch (error) {
+      await showAlert('AI fill failed', error instanceof Error ? error.message : describeAiError(error));
+    } finally { setIsScanning(false); }
+  };
+
+  /** AI fill for one song already in the library. Returns the updates so the sheet can show them. */
+  const autoFillSong = async (songId: string): Promise<{ updates: Partial<Song>; error?: string }> => {
+    const song = data.songs[songId];
+    if (!song) return { updates: {} };
+    const res = await enrichSongs([{ id: songId, title: song.title, artist: song.artist, key: song.key, bpm: song.bpm, duration: song.duration, year: song.year }]);
+    if (res.error && !res.updates[songId]) return { updates: {}, error: res.error };
+    const updates = pickMissing(song, res.updates[songId] || {});
+    if (Object.keys(updates).length) handleUpdateSong(songId, updates);
+    return { updates };
+  };
+
+  /** AI fill for every song that has gaps. */
+  const fillMissingData = async () => {
+    setIsToolsOpen(false);
+    const targets = Object.values(data.songs).filter(hasGaps);
+    if (targets.length === 0) {
+      await showAlert('Nothing missing', 'Every song already has an artist, key, BPM, length and year.');
+      return;
+    }
+    const ok = await showConfirm('Fill missing data with AI', `Look up artist, key, BPM, length and year for ${targets.length} song${targets.length === 1 ? '' : 's'}? Only empty fields are filled; nothing you typed is overwritten. AI can be wrong, so give the keys a quick check.`, { confirmLabel: 'Fill in' });
+    if (!ok) return;
+    setIsEnriching(true);
+    try {
+      const res = await enrichSongs(targets.map(s => ({ id: s.id, title: s.title, artist: s.artist, key: s.key, bpm: s.bpm, duration: s.duration, year: s.year })));
+      let changed = 0;
+      setData(prev => {
+        const songs = { ...prev.songs };
+        Object.entries(res.updates).forEach(([id, found]) => {
+          const cur = songs[id];
+          if (!cur) return;
+          const fill = pickMissing(cur, found);
+          if (Object.keys(fill).length) { songs[id] = { ...cur, ...fill }; changed++; }
+        });
+        return { ...prev, songs };
+      });
+      const failedNote = res.failed ? `\n\n${res.failed} song${res.failed === 1 ? '' : 's'} could not be looked up: ${res.error}` : '';
+      await showAlert(changed ? 'Songs updated' : 'No changes', `${changed} of ${targets.length} song${targets.length === 1 ? '' : 's'} got new details.${failedNote}`);
+    } finally {
+      setIsEnriching(false);
+    }
   };
 
   // ── Drag & drop ────────────────────────────────────────────────────────────
@@ -471,22 +544,29 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
   // ── Export / print ─────────────────────────────────────────────────────────
   const handleExportPDF = () => {
     setIsToolsOpen(false);
+    // Only the sets: never the Song Library or the Do Not Play list.
+    const filledSetIds = setIds.filter(id => (data.columns[id]?.songIds || []).some(sid => data.songs[sid]));
+    if (filledSetIds.length === 0) {
+      showAlert('No sets to print', 'None of your sets have songs yet. Drag songs into a set or tap Generate Sets first.');
+      return;
+    }
     const doc = new jsPDF();
     doc.setFontSize(20); doc.text(`${band.name} - Set Lists`, 14, 20);
-    let y = 35;
-    data.columnOrder.forEach(id => {
+    let y = 32;
+    filledSetIds.forEach(id => {
       const col = data.columns[id];
-      if (col.songIds.length > 0) {
-        doc.setFontSize(14); doc.text(`${col.title} (${col.targetDuration || '?'}m target)`, 14, y);
-        y += 5;
-        const body = col.songIds.map((sid, i) => {
-          const s = data.songs[sid];
-          return s ? [i + 1, s.title, s.artist, formatKey(s.key) || '-', s.duration || '-', s.bpm || '-', s.vocalist || '-', s.year || '-'] : [];
-        });
-        autoTable(doc, { startY: y, head: [['#', 'Song', 'Artist', 'Key', 'Duration', 'BPM', 'Vocalist', 'Year']], body });
-        // @ts-ignore
-        y = doc.lastAutoTable.finalY + 15;
-      }
+      const songs = col.songIds.map(sid => data.songs[sid]).filter(Boolean) as Song[];
+      if (y > 250) { doc.addPage(); y = 20; }
+      const mins = Math.round(songs.reduce((sum, s) => {
+        const m = /^(\d+):(\d{2})$/.exec(s.duration || '');
+        return sum + (m ? Number(m[1]) + Number(m[2]) / 60 : 3.5);
+      }, 0));
+      doc.setFontSize(14); doc.text(`${col.title} - ${songs.length} songs - about ${mins} min`, 14, y);
+      y += 5;
+      const body = songs.map((s, i) => [i + 1, s.title, s.artist, formatKey(s.key) || '-', s.duration || '-', s.bpm || '-', s.vocalist || '-', s.year || '-']);
+      autoTable(doc, { startY: y, head: [['#', 'Song', 'Artist', 'Key', 'Duration', 'BPM', 'Vocalist', 'Year']], body });
+      // @ts-ignore
+      y = doc.lastAutoTable.finalY + 15;
     });
     doc.save(`${band.name.replace(/[^\w-]+/g, '_')}-Setlist-${Date.now()}.pdf`);
   };
@@ -605,6 +685,9 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
         <button onClick={() => setIsImportOpen(true)} className={`${btn} text-emerald-400`}><Upload className="w-3 h-3" /> Import</button>
         <button onClick={downloadTemplate} className={`${btn} text-emerald-400`}><Download className="w-3 h-3" /> Template</button>
         <button onClick={handleExportCsv} className={`${btn} text-gray-300`}><FileSpreadsheet className="w-3 h-3" /> CSV</button>
+        <button onClick={fillMissingData} disabled={isEnriching} className={`${btn} text-indigo-300 disabled:opacity-50`} title="Use AI to fill in missing artist, key, BPM, length and year">
+          {isEnriching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} AI Fill
+        </button>
         <button onClick={handleExportPDF} className={`${btn} text-red-400`}><FileText className="w-3 h-3" /> PDF</button>
         <button onClick={printSetLyrics} className={`${btn} text-sky-400`}><Printer className="w-3 h-3" /> Lyrics</button>
         <button onClick={handleReset} className={`${btn} text-gray-400 hover:!bg-red-900/30`}><RotateCcw className="w-3 h-3" /> Reset</button>
@@ -651,6 +734,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     isOptimizing: optimizingCol === id,
     onUpdateSong: handleUpdateSong,
     onOpenSong: setOpenSongId,
+    onDeleteSong: deleteSong,
     mobile: !isDesktop,
     ...(id.startsWith('setlist')
       ? { onUpdateTargetDuration: handleUpdateTargetDuration, onGroupKeys: handleGroupKeys, keyChanges: keyChangesFor(id) }
@@ -809,6 +893,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
           onUpdate={handleUpdateSong}
           onMove={moveSong}
           onDelete={deleteSong}
+          onAutoFill={autoFillSong}
           onClose={() => setOpenSongId(null)}
         />
       )}
@@ -833,7 +918,8 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
                 { icon: <Upload className="w-4 h-4 text-emerald-400" />, text: 'Import songs', on: () => { setIsToolsOpen(false); setIsImportOpen(true); } },
                 { icon: <Download className="w-4 h-4 text-emerald-400" />, text: 'CSV template', on: () => { setIsToolsOpen(false); downloadTemplate(); } },
                 { icon: <FileSpreadsheet className="w-4 h-4 text-gray-300" />, text: 'Export CSV', on: handleExportCsv },
-                { icon: <FileText className="w-4 h-4 text-red-400" />, text: 'Export PDF', on: handleExportPDF },
+                { icon: <Sparkles className="w-4 h-4 text-indigo-300" />, text: 'AI fill missing data', on: fillMissingData },
+                { icon: <FileText className="w-4 h-4 text-red-400" />, text: 'Export PDF (sets only)', on: handleExportPDF },
                 { icon: <Printer className="w-4 h-4 text-sky-400" />, text: 'Print lyrics', on: printSetLyrics },
                 ...(!isLocal && band.isOwner ? [{ icon: <Share2 className="w-4 h-4 text-indigo-300" />, text: 'Share band', on: () => { setIsToolsOpen(false); setIsShareOpen(true); } }] : []),
                 { icon: <RotateCcw className="w-4 h-4 text-gray-400" />, text: 'Reset band', on: handleReset },

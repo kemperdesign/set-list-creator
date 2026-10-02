@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Printer, Mail, MessageSquare, Share2, Copy, Check, ChevronLeft, ChevronRight,
-  Pencil, Info, AlignLeft, Trash2, ArrowRightLeft, Minus, Plus, Music,
+  Pencil, Info, AlignLeft, Trash2, ArrowRightLeft, Minus, Plus, Music, Sparkles, Loader2,
 } from 'lucide-react';
 import Sheet from './Sheet';
 import { Song } from '../types';
@@ -22,6 +22,8 @@ interface SongSheetProps {
   onUpdate: (songId: string, updates: Partial<Song>) => void;
   onMove: (songId: string, toColumnId: string) => void;
   onDelete: (songId: string) => void;
+  /** AI lookup of missing artist/key/BPM/length/year. Fills only empty fields and returns what it added. */
+  onAutoFill?: (songId: string) => Promise<{ updates: Partial<Song>; error?: string }>;
   onClose: () => void;
 }
 
@@ -37,8 +39,10 @@ const readBool = (k: string) => { try { return localStorage.getItem(k) === '1'; 
 
 const SongSheet: React.FC<SongSheetProps> = ({
   song, currentColumnId, destinations, prevId, nextId, positionLabel,
-  onNavigate, onUpdate, onMove, onDelete, onClose,
+  onNavigate, onUpdate, onMove, onDelete, onAutoFill, onClose,
 }) => {
+  const [filling, setFilling] = useState(false);
+  const [fillMsg, setFillMsg] = useState('');
   const [mode, setMode] = useState<Mode>('lyrics');
   const [fontSize, setFontSize] = useState(() => readNum(SIZE_KEY, 20));
   const [mono, setMono] = useState(() => readBool(MONO_KEY));
@@ -111,6 +115,32 @@ const SongSheet: React.FC<SongSheetProps> = ({
       year: Number.isFinite(year) && year > 1000 ? year : undefined,
     });
     setMode('lyrics');
+  };
+
+  const autoFill = async () => {
+    if (!onAutoFill) return;
+    setFilling(true);
+    setFillMsg('');
+    try {
+      // Fields typed in the form but not saved yet count as filled, so they are not overwritten.
+      const { updates, error } = await onAutoFill(song.id);
+      if (error) { setFillMsg(error); return; }
+      const names = Object.keys(updates);
+      if (names.length === 0) { setFillMsg('Nothing to add. Everything is filled in, or the AI was not sure about this song.'); return; }
+      setDraft(d => ({
+        ...d,
+        artist: d.artist.trim() && !/^unknown artist$/i.test(d.artist.trim()) ? d.artist : (updates.artist ?? d.artist),
+        key: d.key.trim() ? d.key : (updates.key ?? d.key),
+        bpm: d.bpm.trim() ? d.bpm : (updates.bpm ? String(updates.bpm) : d.bpm),
+        duration: d.duration.trim() ? d.duration : (updates.duration ?? d.duration),
+        year: d.year.trim() ? d.year : (updates.year ? String(updates.year) : d.year),
+      }));
+      setFillMsg(`Added ${names.join(', ')}. Double-check them; AI can be wrong.`);
+    } catch (e) {
+      setFillMsg(e instanceof Error ? e.message : 'The AI request failed.');
+    } finally {
+      setFilling(false);
+    }
   };
 
   const copy = async () => {
@@ -242,6 +272,18 @@ const SongSheet: React.FC<SongSheetProps> = ({
 
       {mode === 'details' && (
         <div className="p-4 space-y-4">
+          {onAutoFill && (
+            <div>
+              <button
+                onClick={autoFill}
+                disabled={filling}
+                className="w-full py-2.5 text-xs font-black uppercase text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {filling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} Fill missing with AI
+              </button>
+              {fillMsg && <p className="text-[11px] text-gray-400 mt-1.5">{fillMsg}</p>}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <label className={label}>Title</label>

@@ -15,6 +15,7 @@ interface SetlistColumnProps {
   onUpdateTargetDuration?: (columnId: string, duration: number) => void;
   onUpdateSong?: (songId: string, updates: Partial<Song>) => void;
   onOpenSong?: (songId: string) => void;
+  onDeleteSong?: (songId: string) => void;
   /** Reorders the set so songs in the same key sit together (fewer instrument changes). */
   onGroupKeys?: (columnId: string) => void;
   /** How many key changes the current order has (shown next to the button). */
@@ -33,6 +34,7 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
   onUpdateTargetDuration,
   onUpdateSong,
   onOpenSong,
+  onDeleteSong,
   onGroupKeys,
   keyChanges,
   mobile,
@@ -152,6 +154,7 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
                     index={index}
                     onUpdateSong={onUpdateSong}
                     onOpenSong={onOpenSong}
+                    onDeleteSong={onDeleteSong}
                     mobile={mobile}
                   />
                 )

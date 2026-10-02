@@ -150,29 +150,111 @@ export const optimizeSetlistFlow = async (
   }
 };
 
-export const getSongDetails = async (title: string): Promise<Partial<Song>> => {
-  const prompt = `Provide Artist, original recording Key (e.g. "G", "F#m", "Bb"), BPM, Duration (M:SS) and Release Year for the song "${title}". Return JSON.`;
-  try {
-    const response = await ai.models.generateContent({
-      model: FLASH_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            artist: { type: Type.STRING },
-            key: { type: Type.STRING },
-            bpm: { type: Type.NUMBER },
-            duration: { type: Type.STRING },
-            year: { type: Type.NUMBER }
-          },
-          required: ["artist"]
+/** Friendly message for the errors people actually hit (missing key, retired model, quota). */
+export const describeAiError = (error: unknown): string => {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (!process.env.VITE_GEMINI_API_KEY) {
+    return 'No Gemini API key is configured for this site (VITE_GEMINI_API_KEY in Vercel).';
+  }
+  if (/API key|API_KEY|permission|403|401/i.test(msg)) return 'Google rejected the Gemini API key. Check that VITE_GEMINI_API_KEY is valid.';
+  if (/404|not found|no longer available|deprecated/i.test(msg)) return 'The AI model name is out of date. It needs updating in services/geminiService.ts.';
+  if (/429|quota|rate/i.test(msg)) return 'The Gemini quota was hit. Wait a minute and try again.';
+  return `The AI request failed: ${msg.slice(0, 160)}`;
+};
+
+export interface SongLookup {
+  id: string;
+  title: string;
+  artist?: string;
+  key?: string;
+  bpm?: number;
+  duration?: string;
+  year?: number;
+}
+
+export interface EnrichResult {
+  updates: Record<string, Partial<Pick<Song, 'artist' | 'key' | 'bpm' | 'duration' | 'year'>>>;
+  /** Songs in batches that failed. */
+  failed: number;
+  error?: string;
+}
+
+const BATCH_SIZE = 15;
+
+/**
+ * Looks up artist / key / BPM / duration / year for songs. The caller decides which fields to
+ * apply (normally only the empty ones). Throws nothing: failures are reported in the result so
+ * the UI can show them instead of silently doing nothing.
+ */
+export const enrichSongs = async (songs: SongLookup[]): Promise<EnrichResult> => {
+  const result: EnrichResult = { updates: {}, failed: 0 };
+
+  for (let i = 0; i < songs.length; i += BATCH_SIZE) {
+    const batch = songs.slice(i, i + BATCH_SIZE);
+    const prompt = `You are a music database. For each song below, give details of the ORIGINAL studio recording.
+Rules:
+- "artist": the performing artist or band. Only change it if the artist given is empty or "Unknown Artist".
+- "key": the main musical key written like "G", "F#m", "Bb" or "Dm". Use "m" for minor, no words.
+- "bpm": beats per minute as a whole number.
+- "duration": track length as M:SS (for example 3:45).
+- "year": the release year.
+- If you are not reasonably confident about a value, OMIT that field. Never guess wildly.
+- Return every song id exactly as given.
+
+Songs: ${JSON.stringify(batch.map(s => ({ id: s.id, title: s.title, artist: s.artist || 'Unknown Artist', key: s.key, bpm: s.bpm, duration: s.duration, year: s.year })))}`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: FLASH_MODEL,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              songs: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    artist: { type: Type.STRING },
+                    key: { type: Type.STRING },
+                    bpm: { type: Type.NUMBER },
+                    duration: { type: Type.STRING },
+                    year: { type: Type.NUMBER }
+                  },
+                  required: ["id"]
+                }
+              }
+            },
+            required: ["songs"]
+          }
         }
-      }
-    });
-    return JSON.parse(response.text || "{}");
-  } catch (error) { return {}; }
+      });
+      const parsed = JSON.parse(response.text || "{}");
+      const valid = new Set(batch.map(s => s.id));
+      (parsed.songs || []).forEach((row: any) => {
+        if (row && valid.has(row.id)) {
+          const { id, ...rest } = row;
+          result.updates[id] = rest;
+        }
+      });
+    } catch (error) {
+      console.error('Song lookup failed:', error);
+      result.failed += batch.length;
+      result.error = describeAiError(error);
+    }
+  }
+  return result;
+};
+
+/** Single-song lookup used by the "magic scan" button on the Add Song form. */
+export const getSongDetails = async (title: string, artist?: string): Promise<Partial<Song>> => {
+  const { updates, error } = await enrichSongs([{ id: 'one', title, artist }]);
+  if (error && !updates.one) throw new Error(error);
+  return updates.one || {};
 };
 
 export const generateSampleData = async (): Promise<Song[]> => {

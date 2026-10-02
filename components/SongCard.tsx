@@ -2,7 +2,7 @@
 import React from 'react';
 import { Draggable } from '@hello-pangea/dnd';
 import { Song } from '../types';
-import { Clock, Activity, Mic2, Calendar, Star, Wand2, Ban, GripVertical, MoreVertical, Music, AlignLeft } from 'lucide-react';
+import { Clock, Activity, Mic2, Calendar, Star, Wand2, Ban, GripVertical, MoreVertical, Music, AlignLeft, Trash2 } from 'lucide-react';
 import { formatKey } from '../lib/keys';
 
 interface SongCardProps {
@@ -11,11 +11,13 @@ interface SongCardProps {
   onUpdateSong?: (songId: string, updates: Partial<Song>) => void;
   /** Opens the song sheet (lyrics, details, move, share). */
   onOpenSong?: (songId: string) => void;
+  /** Deletes the song everywhere (asks for confirmation first). */
+  onDeleteSong?: (songId: string) => void;
   /** Phone layout: bigger tap targets and a dedicated drag handle so the list can still scroll. */
   mobile?: boolean;
 }
 
-const SongCard: React.FC<SongCardProps> = ({ song, index, onUpdateSong, onOpenSong, mobile }) => {
+const SongCard: React.FC<SongCardProps> = ({ song, index, onUpdateSong, onOpenSong, onDeleteSong, mobile }) => {
   const handleRating = (r: number) => {
     onUpdateSong?.(song.id, { rating: song.rating === r ? 0 : r });
   };
@@ -89,6 +91,16 @@ const SongCard: React.FC<SongCardProps> = ({ song, index, onUpdateSong, onOpenSo
               >
                 <MoreVertical className={icon} />
               </button>
+              {onDeleteSong && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDeleteSong(song.id); }}
+                  className={`${mobile ? 'p-2' : 'p-1'} rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors`}
+                  title="Delete song"
+                  aria-label="Delete song"
+                >
+                  <Trash2 className={icon} />
+                </button>
+              )}
             </div>
           </div>
 
