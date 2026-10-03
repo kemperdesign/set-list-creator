@@ -5,6 +5,9 @@ import { BoardData, Song, EraPreference, SetlistSnapshot, SongListSnapshot } fro
 import SetlistColumn from './SetlistColumn';
 import FileUpload, { downloadTemplate } from './FileUpload';
 import SongSheet from './SongSheet';
+import StageView from './StageView';
+import LightsSheet from './LightsSheet';
+import { fireCue } from '../lib/cues';
 import Sheet from './Sheet';
 import ShareBandDialog from './ShareBandDialog';
 import { optimizeSetlistFlow, getSongDetails, enrichSongs, describeAiError, smartDistributeSongs } from '../services/geminiService';
@@ -17,7 +20,7 @@ import { COMMON_KEYS, countKeyChanges, formatKey, groupSongIdsByKey } from '../l
 import { downloadTextFile, exportSongsCsv, normalizeDuration } from '../lib/csv';
 import { printSongs } from '../lib/shareSong';
 import {
-  Disc3, ListMusic, FileText, RotateCcw, Layers, Plus, Wand2, Sparkles, Loader2, Music2, Music, Users2,
+  Disc3, ListMusic, Lightbulb, MonitorPlay, FileText, RotateCcw, Layers, Plus, Wand2, Sparkles, Loader2, Music2, Music, Users2,
   History, Save, Trash2, ChevronLeft, ChevronDown, Menu, Cloud, CloudOff, Wifi, Download,
   Upload, Printer, Share2, LogOut, FileSpreadsheet,
 } from 'lucide-react';
@@ -30,6 +33,8 @@ type SyncStatus = 'loading' | 'syncing' | 'synced' | 'offline' | 'local';
 
 interface BoardProps {
   band: { id: string; name: string; isOwner: boolean };
+  /** Open straight into Stage mode (used by the Stage window link). */
+  startInStage?: boolean;
   userEmail?: string;
   onBack?: () => void;
   onSignOut?: () => void;
@@ -43,7 +48,7 @@ const SyncBadge: React.FC<{ status: SyncStatus; compact?: boolean }> = ({ status
   return <div className={`${base} text-amber-500`} title="Offline - changes are kept on this device and sync when you reconnect"><CloudOff className="w-3.5 h-3.5" />{!compact && 'Offline'}</div>;
 };
 
-const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => {
+const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, onSignOut }) => {
   const isLocal = !supabase || band.id === LOCAL_BAND_ID;
   const cacheKey = isLocal ? STORAGE_KEY : `SETLIST_BAND_${band.id}`;
   const isDesktop = useIsDesktop();
@@ -65,6 +70,10 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isListsOpen, setIsListsOpen] = useState(false);
+  const [isStageOpen, setIsStageOpen] = useState(!!startInStage);
+  const [isLightsOpen, setIsLightsOpen] = useState(false);
+  const [playedIds, setPlayedIds] = useState<string[]>([]);
+  const [lastPlayedId, setLastPlayedId] = useState<string | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isToolsOpen, setIsToolsOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
@@ -356,6 +365,39 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     });
     if (!isDesktop) setActiveTab('pool');
   };
+
+  // ── Stage mode (performance view) + lighting / recording cues ─────────────
+  const stageUrl = `${window.location.origin}/?stage=${encodeURIComponent(band.id)}`;
+  const openStageWindow = () => {
+    setIsToolsOpen(false);
+    const w = window.open(stageUrl, '_blank');
+    if (!w) setIsStageOpen(true); // popup blocked: use this window instead
+  };
+  const openFromStage = (songId: string) => {
+    setLastPlayedId(songId);
+    setPlayedIds(prev => (prev.includes(songId) ? prev : [...prev, songId]));
+    setOpenSongId(songId);
+  };
+  const setIntegrations = (next: { webhookEnabled: boolean; webhookUrl: string }) =>
+    setData(prev => ({ ...prev, integrations: { ...(prev.integrations || {}), ...next } }));
+
+  const cueContext = (songId: string) => {
+    const song = data.songs[songId];
+    const colId = columnOfSong(songId);
+    const col = colId ? data.columns[colId] : undefined;
+    const idx = col ? col.songIds.indexOf(songId) : -1;
+    const next = col && idx >= 0 ? data.songs[col.songIds[idx + 1]] : undefined;
+    return { bandId: band.id, bandName: band.name, song, setTitle: colId?.startsWith('setlist') ? col?.title : undefined, position: idx >= 0 ? idx + 1 : undefined, total: col?.songIds.length, nextTitle: next?.title };
+  };
+  const prevOpenRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevOpenRef.current;
+    prevOpenRef.current = openSongId;
+    if (!isStageOpen || !data.integrations?.webhookEnabled || !data.integrations.webhookUrl) return;
+    const url = data.integrations.webhookUrl;
+    if (prev && prev !== openSongId && data.songs[prev]) fireCue(url, 'song_end', cueContext(prev));
+    if (openSongId && openSongId !== prev) fireCue(url, 'song_start', cueContext(openSongId));
+  }, [openSongId]);
 
   // ── Saved set configurations (per band) ────────────────────────────────────
   const saveSnapshot = async () => {
@@ -826,6 +868,8 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
         {setCountSelect}
         <button onClick={saveSnapshot} className={`${btn} text-indigo-400`}><Save className="w-3 h-3" /> Save</button>
         <button onClick={() => setIsHistoryOpen(true)} className={`${btn} text-amber-400`}><History className="w-3 h-3" /> History</button>
+        <button onClick={openStageWindow} className={`${btn} text-sky-300`} title="Performance view in its own window"><MonitorPlay className="w-3 h-3" /> Stage</button>
+        <button onClick={() => setIsLightsOpen(true)} className={`${btn} text-yellow-300`} title="Lighting and recording cues"><Lightbulb className="w-3 h-3" /> Lights</button>
         <button onClick={() => setIsListsOpen(true)} className={`${btn} text-teal-300`} title="Save, update, reload and export song lists"><ListMusic className="w-3 h-3" /> Song lists</button>
         <button onClick={() => setIsImportOpen(true)} className={`${btn} text-emerald-400`}><Upload className="w-3 h-3" /> Import</button>
         <button onClick={downloadTemplate} className={`${btn} text-emerald-400`}><Download className="w-3 h-3" /> Template</button>
@@ -1025,6 +1069,33 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
         )}
       </DragDropContext>
 
+      {/* Stage mode: performance view. Sits under the song sheet (z-150). */}
+      {isStageOpen && (
+        <StageView
+          data={data}
+          bandName={band.name}
+          userEmail={userEmail}
+          playedIds={playedIds}
+          lastId={lastPlayedId}
+          lightsOn={!!data.integrations?.webhookEnabled && !!data.integrations?.webhookUrl}
+          onOpenSong={openFromStage}
+          onOpenLights={() => setIsLightsOpen(true)}
+          onExit={() => { if (startInStage) { window.location.href = window.location.origin + '/'; } else setIsStageOpen(false); }}
+          standalone={!!startInStage}
+        />
+      )}
+
+      {isLightsOpen && (
+        <LightsSheet
+          enabled={!!data.integrations?.webhookEnabled}
+          url={data.integrations?.webhookUrl || ''}
+          bandId={band.id}
+          bandName={band.name}
+          onChange={setIntegrations}
+          onClose={() => setIsLightsOpen(false)}
+        />
+      )}
+
       {/* Song: lyrics / details / move / print / email / text */}
       {openSong && (
         <SongSheet
@@ -1040,6 +1111,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
           onMove={moveSong}
           onDelete={deleteSong}
           onAutoFill={autoFillSong}
+          userEmail={userEmail}
           onClose={() => setOpenSongId(null)}
         />
       )}
@@ -1060,6 +1132,8 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
             <section className="grid grid-cols-2 gap-2">
               {[
                 { icon: <Save className="w-4 h-4 text-indigo-400" />, text: 'Save sets', on: () => { setIsToolsOpen(false); saveSnapshot(); } },
+                { icon: <MonitorPlay className="w-4 h-4 text-sky-300" />, text: 'Stage mode', on: openStageWindow },
+                { icon: <Lightbulb className="w-4 h-4 text-yellow-300" />, text: 'Lights and cues', on: () => { setIsToolsOpen(false); setIsLightsOpen(true); } },
                 { icon: <ListMusic className="w-4 h-4 text-teal-300" />, text: 'Song lists', on: () => { setIsToolsOpen(false); setIsListsOpen(true); } },
                 { icon: <History className="w-4 h-4 text-amber-400" />, text: 'History', on: () => { setIsToolsOpen(false); setIsHistoryOpen(true); } },
                 { icon: <Upload className="w-4 h-4 text-emerald-400" />, text: 'Import songs', on: () => { setIsToolsOpen(false); setIsImportOpen(true); } },

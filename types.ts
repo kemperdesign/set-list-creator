@@ -13,6 +13,10 @@ export interface Song {
   isExcludedFromAuto?: boolean; // If true, Gemini skips this song
   /** Lyrics / chord chart text. Entered by the band (never fetched automatically). */
   lyrics?: string;
+  /** Personal charts, one per band member (keyed by lowercase email). Lyrics above stay shared by everyone. */
+  charts?: Record<string, string>;
+  /** Free text sent to the lighting / recording webhook when this song starts (for example a scene name). */
+  cue?: string;
 }
 
 export type EraPreference = 'old' | 'new' | 'mixed';
@@ -56,6 +60,8 @@ export interface BoardData {
   columns: Record<string, SetlistColumn>;
   columnOrder: string[];
   history: SetlistSnapshot[];
+  /** Lighting / recording webhook (generic). Fired from Stage mode when a song starts and ends. */
+  integrations?: { webhookEnabled?: boolean; webhookUrl?: string };
   /** Saved song lists (song library snapshots). */
   songLists?: SongListSnapshot[];
   config: GeneratorConfig;

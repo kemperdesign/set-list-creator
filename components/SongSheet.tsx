@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Printer, Mail, MessageSquare, Share2, Copy, Check, ChevronLeft, ChevronRight,
-  Pencil, Info, AlignLeft, Trash2, ArrowRightLeft, Minus, Plus, Music, Sparkles, Loader2, Play, Pause, ALargeSmall,
+  Pencil, Info, AlignLeft, Trash2, ArrowRightLeft, Minus, Plus, Music, Sparkles, Loader2, Play, Pause, ALargeSmall, Users,
 } from 'lucide-react';
 import Sheet from './Sheet';
 import Metronome from './Metronome';
@@ -25,6 +25,8 @@ interface SongSheetProps {
   onDelete: (songId: string) => void;
   /** AI lookup of missing artist/key/BPM/length/year. Fills only empty fields and returns what it added. */
   onAutoFill?: (songId: string) => Promise<{ updates: Partial<Song>; error?: string }>;
+  /** Signed-in member; enables personal charts. Lyrics stay shared. */
+  userEmail?: string;
   onClose: () => void;
 }
 
@@ -40,13 +42,22 @@ const readBool = (k: string) => { try { return localStorage.getItem(k) === '1'; 
 
 const SongSheet: React.FC<SongSheetProps> = ({
   song, currentColumnId, destinations, prevId, nextId, positionLabel,
-  onNavigate, onUpdate, onMove, onDelete, onAutoFill, onClose,
+  onNavigate, onUpdate, onMove, onDelete, onAutoFill, userEmail, onClose,
 }) => {
   const [filling, setFilling] = useState(false);
   const [fillMsg, setFillMsg] = useState('');
   const [mode, setMode] = useState<Mode>('lyrics');
   const [fontSize, setFontSize] = useState(() => readNum(SIZE_KEY, 20));
   const [mono, setMono] = useState(() => readBool(MONO_KEY));
+  const myKey = (userEmail || '').toLowerCase();
+  const chartKeys = Object.keys(song.charts || {}).filter(k => (song.charts?.[k] || '').trim());
+  // Default to your own chart when you have one; lyrics are shared by everyone.
+  const [viewAs, setViewAs] = useState<string>(() => (myKey && song.charts?.[myKey]?.trim() ? myKey : ''));
+  const [editTarget, setEditTarget] = useState<'shared' | 'mine'>('shared');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const shownText = viewAs ? (song.charts?.[viewAs] || '') : (song.lyrics || '');
+  const viewSong: Song = { ...song, lyrics: shownText };
+  const nameOf = (e: string) => (e === myKey ? 'My chart' : e.split('@')[0]);
   const [lyricsDraft, setLyricsDraft] = useState(song.lyrics || '');
   const [copied, setCopied] = useState(false);
 
@@ -66,11 +77,14 @@ const SongSheet: React.FC<SongSheetProps> = ({
     duration: song.duration || '',
     vocalist: song.vocalist || '',
     year: song.year ? String(song.year) : '',
+    cue: song.cue || '',
   });
 
   // Reset the drafts when stepping to another song (prev/next).
   useEffect(() => {
     setMode('lyrics');
+    setViewAs(myKey && song.charts?.[myKey]?.trim() ? myKey : '');
+    setEditTarget('shared');
     setLyricsDraft(song.lyrics || '');
     setDraft({
       title: song.title,
@@ -80,6 +94,7 @@ const SongSheet: React.FC<SongSheetProps> = ({
       duration: song.duration || '',
       vocalist: song.vocalist || '',
       year: song.year ? String(song.year) : '',
+      cue: song.cue || '',
     });
   }, [song.id]);
 
@@ -151,8 +166,22 @@ const SongSheet: React.FC<SongSheetProps> = ({
   };
 
   const saveLyrics = () => {
-    onUpdate(song.id, { lyrics: lyricsDraft.trim() || undefined });
+    const text = lyricsDraft.trim();
+    if (editTarget === 'mine' && myKey) {
+      const charts = { ...(song.charts || {}) };
+      if (text) charts[myKey] = text; else delete charts[myKey];
+      onUpdate(song.id, { charts: Object.keys(charts).length ? charts : undefined });
+      setViewAs(text ? myKey : '');
+    } else {
+      onUpdate(song.id, { lyrics: text || undefined });
+      setViewAs('');
+    }
     setMode('lyrics');
+  };
+
+  const startEdit = (target: 'shared' | 'mine') => {
+    setEditTarget(target);
+    setLyricsDraft(target === 'mine' ? (song.charts?.[myKey] || song.lyrics || '') : (song.lyrics || ''));
   };
 
   const saveDetails = () => {
@@ -166,6 +195,7 @@ const SongSheet: React.FC<SongSheetProps> = ({
       duration: normalizeDuration(draft.duration),
       vocalist: draft.vocalist.trim() || undefined,
       year: Number.isFinite(year) && year > 1000 ? year : undefined,
+      cue: draft.cue.trim() || undefined,
     });
     setMode('lyrics');
   };
@@ -197,14 +227,14 @@ const SongSheet: React.FC<SongSheetProps> = ({
   };
 
   const copy = async () => {
-    if (await copyText(songToText(song))) {
+    if (await copyText(songToText(viewSong))) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }
   };
 
   const share = async () => {
-    try { await nativeShare(song); } catch { /* user cancelled */ }
+    try { await nativeShare(viewSong); } catch { /* user cancelled */ }
   };
 
   const key = formatKey(song.key);
@@ -222,7 +252,7 @@ const SongSheet: React.FC<SongSheetProps> = ({
   );
 
   const barsLabel = barsPerLine === 1 ? '1 bar/line' : `${barsPerLine} bars/line`;
-  const estLines = (song.lyrics || '').split('\n').length;
+  const estLines = shownText.split('\n').length;
   const estSecs = Math.round((estLines * barsPerLine * 4 * 60) / tempo / trim);
   const perform = (
     <div className="space-y-2 pb-1 border-b border-gray-800">
@@ -233,7 +263,7 @@ const SongSheet: React.FC<SongSheetProps> = ({
         <button onClick={() => changeSize(-4)} aria-label="Smaller lyrics" className="h-11 w-11 flex items-center justify-center rounded-lg bg-gray-800 text-gray-200"><ALargeSmall className="w-4 h-4" /></button>
         <span className="text-[11px] text-gray-400 font-mono w-9 text-center">{fontSize}</span>
         <button onClick={() => changeSize(4)} aria-label="Bigger lyrics" className="h-11 w-11 flex items-center justify-center rounded-lg bg-gray-800 text-gray-200"><ALargeSmall className="w-6 h-6" /></button>
-        {song.lyrics && (
+        {shownText && (
           <>
             <button
               onClick={() => setScrolling(v => !v)}
@@ -270,9 +300,9 @@ const SongSheet: React.FC<SongSheetProps> = ({
     <div className="p-2 space-y-2">
       {perform}
       <div className="flex gap-1.5">
-        <button className={actionBtn} onClick={() => printSongs([song], mono, 16)}><Printer className="w-4 h-4" />Print</button>
-        <a className={actionBtn} href={mailtoHref(song)}><Mail className="w-4 h-4" />Email</a>
-        <a className={actionBtn} href={smsHref(song)}><MessageSquare className="w-4 h-4" />Text</a>
+        <button className={actionBtn} onClick={() => printSongs([viewSong], mono, 16)}><Printer className="w-4 h-4" />Print</button>
+        <a className={actionBtn} href={mailtoHref(viewSong)}><Mail className="w-4 h-4" />Email</a>
+        <a className={actionBtn} href={smsHref(viewSong)}><MessageSquare className="w-4 h-4" />Text</a>
         {canNativeShare() && <button className={actionBtn} onClick={share}><Share2 className="w-4 h-4" />Share</button>}
         <button className={actionBtn} onClick={copy}>{copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}{copied ? 'Copied' : 'Copy'}</button>
       </div>
@@ -316,7 +346,33 @@ const SongSheet: React.FC<SongSheetProps> = ({
 
       {mode === 'lyrics' && (
         <div className="p-4">
-          {song.lyrics ? (
+          {userEmail && (chartKeys.length > 0 || song.lyrics) && (
+            <div className="mb-3 relative">
+              <button
+                onClick={() => setPickerOpen(o => !o)}
+                className="w-full h-11 px-3 flex items-center justify-between rounded-lg bg-gray-800 text-sm font-bold text-gray-100"
+              >
+                <span className="flex items-center gap-2 min-w-0"><Users className="w-4 h-4 text-sky-300 flex-shrink-0" /><span className="truncate">Viewing: {viewAs ? nameOf(viewAs) : 'Shared lyrics'}</span></span>
+                <span className="text-[10px] text-gray-500 uppercase">{chartKeys.length} chart{chartKeys.length === 1 ? '' : 's'}</span>
+              </button>
+              {pickerOpen && (
+                <div className="absolute z-20 left-0 right-0 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl overflow-hidden">
+                  <button onClick={() => { setViewAs(''); setPickerOpen(false); }} className={`w-full text-left px-3 py-3 text-sm border-b border-gray-800 ${viewAs === '' ? 'text-indigo-300 font-bold' : 'text-gray-200'}`}>Shared lyrics</button>
+                  {myKey && (
+                    <button onClick={() => { if (song.charts?.[myKey]) { setViewAs(myKey); setPickerOpen(false); } else { setEditTarget('mine'); setLyricsDraft(song.lyrics || ''); setMode('edit'); setPickerOpen(false); } }} className={`w-full text-left px-3 py-3 text-sm border-b border-gray-800 ${viewAs === myKey ? 'text-indigo-300 font-bold' : 'text-gray-200'}`}>
+                      My chart{song.charts?.[myKey] ? '' : ' (not made yet - tap to create)'}
+                    </button>
+                  )}
+                  {chartKeys.filter(k => k !== myKey).map(k => (
+                    <button key={k} onClick={() => { setViewAs(k); setPickerOpen(false); }} className={`w-full text-left px-3 py-3 text-sm border-b border-gray-800 last:border-b-0 ${viewAs === k ? 'text-indigo-300 font-bold' : 'text-gray-200'}`}>
+                      {nameOf(k)}'s chart
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {shownText ? (
             <>
               <div className="flex items-center gap-2 mb-3">
                 <button onClick={() => changeSize(-2)} aria-label="Smaller text" className="p-2 bg-gray-800 rounded-lg text-gray-300"><Minus className="w-4 h-4" /></button>
@@ -335,7 +391,7 @@ const SongSheet: React.FC<SongSheetProps> = ({
                 className="whitespace-pre-wrap break-words text-gray-100 leading-relaxed"
                 style={{ fontSize, fontFamily: mono ? 'ui-monospace, Menlo, Consolas, monospace' : 'inherit' }}
               >
-                {song.lyrics}
+                {shownText}
               </pre>
             </>
           ) : (
@@ -352,8 +408,19 @@ const SongSheet: React.FC<SongSheetProps> = ({
 
       {mode === 'edit' && (
         <div className="p-4 space-y-3">
+          {myKey && (
+            <div className="flex p-0.5 bg-gray-950 rounded-lg border border-gray-800 gap-0.5">
+              {(['shared', 'mine'] as const).map(t => (
+                <button key={t} onClick={() => startEdit(t)} className={`flex-1 py-2 text-[11px] font-black uppercase rounded-md ${editTarget === t ? 'bg-indigo-600 text-white' : 'text-gray-400'}`}>
+                  {t === 'shared' ? 'Shared lyrics' : 'My chart'}
+                </button>
+              ))}
+            </div>
+          )}
           <p className="text-xs text-gray-500">
-            Paste your own lyrics or chord chart. Line breaks are kept. Everyone in the band sees the same lyrics.
+            {editTarget === 'mine'
+              ? 'Your personal chart for this song (chords, charts, notes for your part). Only you see it by default; bandmates can open it from the Viewing menu.'
+              : 'Paste lyrics or a chord chart. Line breaks are kept. Everyone in the band sees the same shared lyrics.'}
           </p>
           <textarea
             value={lyricsDraft}
@@ -364,8 +431,8 @@ const SongSheet: React.FC<SongSheetProps> = ({
             style={{ minHeight: '40vh' }}
           />
           <div className="flex gap-2">
-            <button onClick={() => { setLyricsDraft(song.lyrics || ''); setMode('lyrics'); }} className="flex-1 py-3 text-xs font-black uppercase text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg">Cancel</button>
-            <button onClick={saveLyrics} className="flex-[2] py-3 text-xs font-black uppercase text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg">Save lyrics</button>
+            <button onClick={() => { setLyricsDraft(editTarget === 'mine' ? (song.charts?.[myKey] || song.lyrics || '') : (song.lyrics || '')); setMode('lyrics'); }} className="flex-1 py-3 text-xs font-black uppercase text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg">Cancel</button>
+            <button onClick={saveLyrics} className="flex-[2] py-3 text-xs font-black uppercase text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg">{editTarget === 'mine' ? 'Save my chart' : 'Save lyrics'}</button>
           </div>
         </div>
       )}
@@ -420,6 +487,11 @@ const SongSheet: React.FC<SongSheetProps> = ({
             <div className="col-span-2">
               <label className={label}>Vocalist</label>
               <input className={input} value={draft.vocalist} onChange={e => setDraft({ ...draft, vocalist: e.target.value })} />
+            </div>
+            <div className="col-span-2">
+              <label className={label}>Light / recording cue (optional)</label>
+              <input className={input} placeholder="e.g. red wash, slow fade" value={draft.cue} onChange={e => setDraft({ ...draft, cue: e.target.value })} />
+              <p className="text-[11px] text-gray-600 mt-1">Sent with the song start/end message from Stage mode (Lights and cues).</p>
             </div>
           </div>
           <button onClick={saveDetails} className="w-full py-3 text-xs font-black uppercase text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg">

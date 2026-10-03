@@ -19,6 +19,10 @@ const App: React.FC = () => {
   const [authReady, setAuthReady] = useState(!supabase);
   const [recovery, setRecovery] = useState(false);
   const [band, setBand] = useState<BandSummary | null>(null);
+  // Stage window link: /?stage=<bandId> opens that band straight into Stage mode.
+  const stageParam = new URLSearchParams(window.location.search).get('stage');
+  const [stageBandId] = useState<string | null>(stageParam);
+  const [stageTried, setStageTried] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -34,6 +38,14 @@ const App: React.FC = () => {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!supabase || !session || !stageBandId || stageBandId === 'local' || band || stageTried) return;
+    setStageTried(true);
+    supabase.from('setlists').select('*').eq('id', stageBandId).maybeSingle().then(({ data }) => {
+      if (data) setBand(data as BandSummary);
+    });
+  }, [session, stageBandId, band, stageTried]);
+
   const signOut = async () => {
     await supabase?.auth.signOut();
     setBand(null);
@@ -41,7 +53,7 @@ const App: React.FC = () => {
 
   // Local-only mode (env vars missing)
   if (!supabase) {
-    return <Board band={{ id: LOCAL_BAND_ID, name: 'Set List Generator', isOwner: true }} />;
+    return <Board band={{ id: LOCAL_BAND_ID, name: 'Set List Generator', isOwner: true }} startInStage={!!stageParam} />;
   }
 
   if (!authReady) {
@@ -71,6 +83,7 @@ const App: React.FC = () => {
     <Board
       key={band.id}
       band={{ id: band.id, name: band.name, isOwner: band.user_id === session.user.id }}
+      startInStage={!!stageBandId && stageBandId === band.id}
       userEmail={session.user.email || ''}
       onBack={() => setBand(null)}
       onSignOut={signOut}
