@@ -84,13 +84,21 @@ export const smartDistributeSongs = async (
   try {
     // The Pro model is best at planning but is also the one most likely to be busy, renamed or
     // retired. If it fails for any reason, retry once with the Flash model before giving up.
+    // "503 high demand" is temporary, so wait and retry a few times, alternating models.
+    const order = [PRO_MODEL, FLASH_MODEL, PRO_MODEL, FLASH_MODEL, FLASH_MODEL];
     let response;
-    try {
-      response = await request(PRO_MODEL);
-    } catch (proError) {
-      console.warn("Pro model failed, retrying with Flash:", proError);
-      response = await request(FLASH_MODEL);
+    let lastError: unknown;
+    for (let i = 0; i < order.length && !response; i++) {
+      try {
+        response = await request(order[i]);
+      } catch (e) {
+        lastError = e;
+        console.warn(`${order[i]} failed (attempt ${i + 1}):`, e);
+        if (!/503|429|overloaded|high demand|unavailable|timeout|fetch/i.test(String((e as any)?.message || e))) break;
+        await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+      }
     }
+    if (!response) throw lastError;
 
     const result = JSON.parse(response.text || "{}");
     // Verify that the result only contains IDs that actually exist in the library
@@ -169,6 +177,7 @@ export const describeAiError = (error: unknown): string => {
   }
   if (/API key|API_KEY|permission|403|401/i.test(msg)) return 'Google rejected the Gemini API key. Check that VITE_GEMINI_API_KEY is valid.';
   if (/404|not found|no longer available|deprecated/i.test(msg)) return 'The AI model name is out of date. It needs updating in services/geminiService.ts.';
+  if (/503|high demand|overloaded|unavailable/i.test(msg)) return 'Google\'s AI is overloaded right now (this is temporary and not a problem with your app). Wait a minute and try again.';
   if (/429|quota|rate/i.test(msg)) return 'The Gemini quota was hit. Wait a minute and try again.';
   return `The AI request failed: ${msg.slice(0, 160)}`;
 };
