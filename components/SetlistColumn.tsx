@@ -3,7 +3,7 @@ import React from 'react';
 import { Droppable } from '@hello-pangea/dnd';
 import { SetlistColumn as ColumnType, Song } from '../types';
 import SongCard from './SongCard';
-import { Sparkles, Plus, Clock, Target, Music } from 'lucide-react';
+import { Sparkles, Plus, Clock, Target, Music, Trash2 } from 'lucide-react';
 
 interface SetlistColumnProps {
   column: ColumnType;
@@ -16,6 +16,8 @@ interface SetlistColumnProps {
   onUpdateSong?: (songId: string, updates: Partial<Song>) => void;
   onOpenSong?: (songId: string) => void;
   onDeleteSong?: (songId: string) => void;
+  /** Removes this set; its songs go back to the Song Library. */
+  onDeleteSet?: (columnId: string) => void;
   /** Reorders the set so songs in the same key sit together (fewer instrument changes). */
   onGroupKeys?: (columnId: string) => void;
   /** How many key changes the current order has (shown next to the button). */
@@ -35,6 +37,7 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
   onUpdateSong,
   onOpenSong,
   onDeleteSong,
+  onDeleteSet,
   onGroupKeys,
   keyChanges,
   mobile,
@@ -71,9 +74,21 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
                </button>
             )}
           </div>
-          <span className="text-[10px] font-mono bg-gray-900 px-1.5 py-0.5 rounded text-gray-400">
-            {songs.length}
-          </span>
+          <div className="flex items-center gap-1">
+            {isSet && onDeleteSet && (
+              <button
+                onClick={() => onDeleteSet(column.id)}
+                className={`${mobile ? 'p-2' : 'p-1'} rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors`}
+                title="Remove this set (songs go back to the Song Library)"
+                aria-label="Remove set"
+              >
+                <Trash2 className={mobile ? 'w-4 h-4' : 'w-3.5 h-3.5'} />
+              </button>
+            )}
+            <span className="text-[10px] font-mono bg-gray-900 px-1.5 py-0.5 rounded text-gray-400">
+              {songs.length}
+            </span>
+          </div>
         </div>
 
         <div className="space-y-2">

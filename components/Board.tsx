@@ -326,6 +326,35 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     });
   };
 
+  /** Removes one set. Its songs go back to the Song Library and the remaining sets close up. */
+  const deleteSet = async (columnId: string) => {
+    const active = setIds;
+    if (!active.includes(columnId)) return;
+    const col = data.columns[columnId];
+    const n = col.songIds.length;
+    if (active.length <= 1) {
+      await showAlert('Keep at least one set', 'The board needs at least one set. Use Reset to clear it instead.');
+      return;
+    }
+    const ok = await showConfirm('Remove set', `Remove "${col.title}"? ${n ? `Its ${n} song${n === 1 ? '' : 's'} will go back to the Song Library.` : 'It has no songs.'}`, { danger: true, confirmLabel: 'Remove set' });
+    if (!ok) return;
+    setData(prev => {
+      const keys = ['setlistA', 'setlistB', 'setlistC', 'setlistD', 'setlistE'];
+      const cur = prev.columnOrder.filter(id => id.startsWith('setlist'));
+      const remaining = cur.filter(id => id !== columnId);
+      const columns = { ...prev.columns };
+      const returned = [...(columns[columnId]?.songIds || [])];
+      // Close the gap: remaining sets move up into the first ids so they stay Set 1, Set 2...
+      const moved = remaining.map(id => ({ songIds: columns[id].songIds, targetDuration: columns[id].targetDuration }));
+      keys.forEach(k => { columns[k] = { ...columns[k], songIds: [] }; });
+      moved.forEach((m, i) => { columns[keys[i]] = { ...columns[keys[i]], songIds: m.songIds, targetDuration: m.targetDuration }; });
+      columns.pool = { ...columns.pool, songIds: [...columns.pool.songIds, ...returned.filter(id => prev.songs[id] && !columns.pool.songIds.includes(id))] };
+      const columnOrder = [...prev.columnOrder.filter(id => !id.startsWith('setlist')), ...keys.slice(0, remaining.length)];
+      return { ...prev, columns, columnOrder };
+    });
+    if (!isDesktop) setActiveTab('pool');
+  };
+
   // ── Saved set configurations (per band) ────────────────────────────────────
   const saveSnapshot = async () => {
     const name = await showPrompt('Save sets', 'Name this arrangement of sets:', `Sets ${new Date().toLocaleDateString()}`);
@@ -847,6 +876,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     onUpdateSong: handleUpdateSong,
     onOpenSong: setOpenSongId,
     onDeleteSong: deleteSong,
+    ...(id.startsWith('setlist') ? { onDeleteSet: deleteSet } : {}),
     mobile: !isDesktop,
     ...(id.startsWith('setlist')
       ? { onUpdateTargetDuration: handleUpdateTargetDuration, onGroupKeys: handleGroupKeys, keyChanges: keyChangesFor(id) }
