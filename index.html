@@ -64,6 +64,16 @@
       [data-panel]:focus-visible {
         outline: none;
       }
+      /* Blinking metronome: flashes the screen edges (colour comes from --metro) and the dot on every beat. */
+      @keyframes metro-edge { from { opacity: 1; } to { opacity: 0; } }
+      .metro-edge {
+        position: fixed; inset: 0; pointer-events: none; z-index: 300;
+        box-shadow: inset 0 0 0 8px var(--metro), inset 0 0 60px 10px var(--metro);
+        animation: metro-edge 0.28s ease-out forwards;
+      }
+      @keyframes metro-dot { from { transform: scale(1.7); } to { transform: scale(1); } }
+      .metro-dot { animation: metro-dot 0.22s ease-out; }
+      @media (prefers-reduced-motion: reduce) { .metro-edge { animation-duration: 0.12s; } }
       @media print {
         body { background: #fff; }
       }

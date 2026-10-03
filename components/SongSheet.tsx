@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Printer, Mail, MessageSquare, Share2, Copy, Check, ChevronLeft, ChevronRight,
-  Pencil, Info, AlignLeft, Trash2, ArrowRightLeft, Minus, Plus, Music, Sparkles, Loader2,
+  Pencil, Info, AlignLeft, Trash2, ArrowRightLeft, Minus, Plus, Music, Sparkles, Loader2, Play, Pause, ALargeSmall,
 } from 'lucide-react';
 import Sheet from './Sheet';
+import Metronome from './Metronome';
 import { Song } from '../types';
 import { COMMON_KEYS, formatKey } from '../lib/keys';
 import { normalizeDuration } from '../lib/csv';
@@ -49,6 +50,14 @@ const SongSheet: React.FC<SongSheetProps> = ({
   const [lyricsDraft, setLyricsDraft] = useState(song.lyrics || '');
   const [copied, setCopied] = useState(false);
 
+  // Perform tools: one tempo drives both the blinking metronome and the teleprompter scroll.
+  const [tempo, setTempo] = useState(() => song.bpm || 100);
+  const [scrolling, setScrolling] = useState(false);
+  const [barsPerLine, setBarsPerLine] = useState(() => readNum('SETLIST_TP_BARS', 2));
+  const [trim, setTrim] = useState(1);
+  const [returnWhenDone, setReturnWhenDone] = useState(() => readNum('SETLIST_TP_RETURN', 1) === 1);
+  const lyricsRef = useRef<HTMLPreElement | null>(null);
+
   const [draft, setDraft] = useState({
     title: song.title,
     artist: song.artist,
@@ -85,8 +94,52 @@ const SongSheet: React.FC<SongSheetProps> = ({
     return () => { cancelled = true; lock?.release?.(); };
   }, [mode]);
 
+  // Teleprompter: scrolls the lyrics at the song's tempo (one line every `barsPerLine` bars of 4/4).
+  useEffect(() => {
+    if (!scrolling) return;
+    const pre = lyricsRef.current;
+    if (!pre) { setScrolling(false); return; }
+    let scroller: HTMLElement | null = pre.parentElement;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!scroller) { setScrolling(false); return; }
+    const box = scroller;
+
+    const lineH = parseFloat(getComputedStyle(pre).lineHeight) || fontSize * 1.625;
+    const pxPerSec = (lineH / ((barsPerLine * 4 * 60) / tempo)) * trim;
+    const atEnd = () => box.scrollTop + box.clientHeight >= box.scrollHeight - 2;
+    if (atEnd()) box.scrollTop = 0;
+
+    let pos = box.scrollTop;
+    let last = performance.now();
+    let raf = 0;
+    let done: number | undefined;
+    const tick = (now: number) => {
+      pos += pxPerSec * ((now - last) / 1000);
+      last = now;
+      box.scrollTop = pos;
+      if (atEnd()) {
+        setScrolling(false);
+        if (returnWhenDone) done = window.setTimeout(onClose, 1500);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    // Touching or wheeling the lyrics takes manual control.
+    const stop = () => setScrolling(false);
+    box.addEventListener('touchstart', stop, { passive: true });
+    box.addEventListener('wheel', stop, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      if (done !== undefined) { /* keep the pending return so a finished song still hands back the setlist */ }
+      box.removeEventListener('touchstart', stop);
+      box.removeEventListener('wheel', stop);
+    };
+  }, [scrolling, tempo, barsPerLine, trim, fontSize, returnWhenDone]);
+
   const changeSize = (delta: number) => {
-    const next = Math.min(48, Math.max(12, fontSize + delta));
+    const next = Math.min(72, Math.max(12, fontSize + delta));
     setFontSize(next);
     try { localStorage.setItem(SIZE_KEY, String(next)); } catch {}
   };
@@ -168,8 +221,54 @@ const SongSheet: React.FC<SongSheetProps> = ({
     </button>
   );
 
+  const barsLabel = barsPerLine === 1 ? '1 bar/line' : `${barsPerLine} bars/line`;
+  const estLines = (song.lyrics || '').split('\n').length;
+  const estSecs = Math.round((estLines * barsPerLine * 4 * 60) / tempo / trim);
+  const perform = (
+    <div className="space-y-2 pb-1 border-b border-gray-800">
+      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+        <Metronome bpm={tempo} onBpmChange={setTempo} />
+      </div>
+      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+        <button onClick={() => changeSize(-4)} aria-label="Smaller lyrics" className="h-11 w-11 flex items-center justify-center rounded-lg bg-gray-800 text-gray-200"><ALargeSmall className="w-4 h-4" /></button>
+        <span className="text-[11px] text-gray-400 font-mono w-9 text-center">{fontSize}</span>
+        <button onClick={() => changeSize(4)} aria-label="Bigger lyrics" className="h-11 w-11 flex items-center justify-center rounded-lg bg-gray-800 text-gray-200"><ALargeSmall className="w-6 h-6" /></button>
+        {song.lyrics && (
+          <>
+            <button
+              onClick={() => setScrolling(v => !v)}
+              className={`h-11 px-3 flex items-center gap-1.5 rounded-lg text-xs font-black uppercase ${scrolling ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-gray-200'}`}
+              title="Auto-scroll the lyrics at the song's tempo"
+            >
+              {scrolling ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />} Scroll
+            </button>
+            <button onClick={() => setTrim(t => Math.max(0.5, +(t - 0.1).toFixed(1)))} aria-label="Scroll slower" className="h-11 w-10 flex items-center justify-center rounded-lg bg-gray-800 text-gray-200"><Minus className="w-4 h-4" /></button>
+            <span className="text-[11px] text-gray-400 font-mono w-9 text-center">{trim.toFixed(1)}x</span>
+            <button onClick={() => setTrim(t => Math.min(2, +(t + 0.1).toFixed(1)))} aria-label="Scroll faster" className="h-11 w-10 flex items-center justify-center rounded-lg bg-gray-800 text-gray-200"><Plus className="w-4 h-4" /></button>
+            <button
+              onClick={() => setBarsPerLine(b => { const n = b === 2 ? 4 : b === 4 ? 1 : 2; try { localStorage.setItem('SETLIST_TP_BARS', String(n)); } catch {} return n; })}
+              title="How many bars each lyric line lasts. Slower songs or long lines want more."
+              className="h-11 px-2 rounded-lg bg-gray-800 text-gray-300 text-[10px] font-bold uppercase whitespace-nowrap"
+            >
+              {barsLabel}
+            </button>
+            <button
+              onClick={() => setReturnWhenDone(r => { try { localStorage.setItem('SETLIST_TP_RETURN', r ? '0' : '1'); } catch {} return !r; })}
+              title="Go back to the setlist when the lyrics finish"
+              className={`h-11 px-2 rounded-lg text-[10px] font-bold uppercase whitespace-nowrap ${returnWhenDone ? 'bg-gray-700 text-emerald-300' : 'bg-gray-800 text-gray-500'}`}
+            >
+              Auto-return
+            </button>
+            <span className="text-[10px] text-gray-500 whitespace-nowrap pl-1">~{Math.floor(estSecs / 60)}:{String(estSecs % 60).padStart(2, '0')}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
   const footer = mode === 'lyrics' ? (
     <div className="p-2 space-y-2">
+      {perform}
       <div className="flex gap-1.5">
         <button className={actionBtn} onClick={() => printSongs([song], mono, 16)}><Printer className="w-4 h-4" />Print</button>
         <a className={actionBtn} href={mailtoHref(song)}><Mail className="w-4 h-4" />Email</a>
@@ -232,6 +331,7 @@ const SongSheet: React.FC<SongSheetProps> = ({
                 </button>
               </div>
               <pre
+                ref={lyricsRef}
                 className="whitespace-pre-wrap break-words text-gray-100 leading-relaxed"
                 style={{ fontSize, fontFamily: mono ? 'ui-monospace, Menlo, Consolas, monospace' : 'inherit' }}
               >
