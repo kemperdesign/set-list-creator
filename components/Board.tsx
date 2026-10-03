@@ -8,6 +8,7 @@ import SongSheet from './SongSheet';
 import Sheet from './Sheet';
 import ShareBandDialog from './ShareBandDialog';
 import { optimizeSetlistFlow, getSongDetails, enrichSongs, describeAiError, smartDistributeSongs } from '../services/geminiService';
+import { planSetsLocally, orderSetLocally } from '../lib/localPlanner';
 import { supabase } from '../lib/supabase';
 import { STORAGE_KEY, makeInitialData, normalizeBoard, titleKey, uid } from '../lib/boardData';
 import { useDialogs } from '../lib/useDialogs';
@@ -371,16 +372,26 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     setIds.forEach(id => { if (data.columns[id].targetDuration) setDurations[id] = data.columns[id].targetDuration!; });
 
     try {
-      let plan: Record<string, string[]>;
+      const config = { ...data.config, setDurations };
+      let plan: Record<string, string[]> = {};
+      let usedBackup = false;
       try {
-        plan = await smartDistributeSongs(library, setIds, { ...data.config, setDurations });
+        plan = await smartDistributeSongs(library, setIds, config);
       } catch (e) {
-        await showAlert('Could not generate sets', e instanceof Error ? e.message : 'The AI request failed. Try again.');
-        return;
+        console.warn('AI planner failed, using built-in planner:', e);
       }
       if (Object.values(plan).every(ids => ids.length === 0)) {
-        await showAlert('Could not generate sets', 'The AI answered but did not place any songs. Try again, or check that not every song is marked as excluded from AI (the wand icon).');
+        // AI unavailable or returned nothing: the built-in planner always works.
+        plan = planSetsLocally(library, setIds, config);
+        usedBackup = true;
+      }
+      if (Object.values(plan).every(ids => ids.length === 0)) {
+        await showAlert('No songs to place', 'Every song in the library is marked as excluded from AI (the wand icon). Turn the wand back on for the songs you want in the sets.');
         return;
+      }
+      if (usedBackup) {
+        // Shown after the sets are built, so it never blocks the result.
+        setTimeout(() => showAlert('Sets built with the backup planner', 'Google\'s AI was unavailable, so the sets were built with the app\'s built-in planner using your ratings, set lengths, tempo, singer and key settings. Tap Generate Sets again later if you want the AI version.'), 300);
       }
       setData(prev => {
         const columns = { ...prev.columns };
@@ -408,7 +419,13 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     const col = data.columns[columnId];
     const songs = col.songIds.map(id => data.songs[id]).filter((s): s is Song => !!s);
     try {
-      let ids = await optimizeSetlistFlow(songs, { groupKeys: data.config.groupKeys });
+      let ids: string[];
+      try {
+        ids = await optimizeSetlistFlow(songs, { groupKeys: data.config.groupKeys });
+      } catch (aiError) {
+        console.warn('AI optimize failed, using built-in ordering:', aiError);
+        ids = orderSetLocally(songs, data.config);
+      }
       if (data.config.groupKeys) ids = groupSongIdsByKey(ids, data.songs);
       setData(prev => ({ ...prev, columns: { ...prev.columns, [columnId]: { ...prev.columns[columnId], songIds: ids } } }));
     } catch (e) {
@@ -592,6 +609,28 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     printSongs(ordered, false, 15);
   };
 
+  /** Sends every song in the sets back to the Song Library (nothing is deleted). */
+  const clearSets = async () => {
+    setIsToolsOpen(false);
+    const inSets = setIds.reduce((n, id) => n + data.columns[id].songIds.length, 0);
+    if (inSets === 0) {
+      await showAlert('Sets are already empty', 'There are no songs in your sets.');
+      return;
+    }
+    const ok = await showConfirm('Clear sets', `Move all ${inSets} songs in your sets back to the Song Library? Tip: tap Save first if you want to keep this arrangement.`, { confirmLabel: 'Clear sets' });
+    if (!ok) return;
+    setData(prev => {
+      const columns = { ...prev.columns };
+      let returned: string[] = [];
+      prev.columnOrder.filter(id => id.startsWith('setlist')).forEach(id => {
+        returned = [...returned, ...columns[id].songIds];
+        columns[id] = { ...columns[id], songIds: [] };
+      });
+      columns.pool = { ...columns.pool, songIds: [...columns.pool.songIds, ...returned.filter(id => !columns.pool.songIds.includes(id))] };
+      return { ...prev, columns };
+    });
+  };
+
   const handleReset = async () => {
     setIsToolsOpen(false);
     const ok = await showConfirm(
@@ -696,6 +735,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
         </button>
         <button onClick={handleExportPDF} className={`${btn} text-red-400`}><FileText className="w-3 h-3" /> PDF</button>
         <button onClick={printSetLyrics} className={`${btn} text-sky-400`}><Printer className="w-3 h-3" /> Lyrics</button>
+        <button onClick={clearSets} className={`${btn} text-amber-300`} title="Move every song in the sets back to the Song Library"><Layers className="w-3 h-3" /> Clear sets</button>
         <button onClick={handleReset} className={`${btn} text-gray-400 hover:!bg-red-900/30`}><RotateCcw className="w-3 h-3" /> Reset</button>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
@@ -928,6 +968,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
                 { icon: <FileText className="w-4 h-4 text-red-400" />, text: 'Export PDF (sets only)', on: handleExportPDF },
                 { icon: <Printer className="w-4 h-4 text-sky-400" />, text: 'Print lyrics', on: printSetLyrics },
                 ...(!isLocal && band.isOwner ? [{ icon: <Share2 className="w-4 h-4 text-indigo-300" />, text: 'Share band', on: () => { setIsToolsOpen(false); setIsShareOpen(true); } }] : []),
+                { icon: <Layers className="w-4 h-4 text-amber-300" />, text: 'Clear sets (keep songs)', on: clearSets },
                 { icon: <RotateCcw className="w-4 h-4 text-gray-400" />, text: 'Reset band', on: handleReset },
               ].map(a => (
                 <button key={a.text} onClick={a.on} className="py-3 px-3 flex items-center gap-2 text-xs font-bold text-gray-100 bg-gray-800 hover:bg-gray-700 rounded-xl text-left">

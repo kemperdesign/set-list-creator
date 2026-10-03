@@ -85,7 +85,8 @@ export const smartDistributeSongs = async (
     // The Pro model is best at planning but is also the one most likely to be busy, renamed or
     // retired. If it fails for any reason, retry once with the Flash model before giving up.
     // "503 high demand" is temporary, so wait and retry a few times, alternating models.
-    const order = [PRO_MODEL, FLASH_MODEL, PRO_MODEL, FLASH_MODEL, FLASH_MODEL];
+    // Kept short: the app has a built-in planner as the final fallback, so the person never waits long.
+    const order = [PRO_MODEL, FLASH_MODEL, FLASH_MODEL];
     let response;
     let lastError: unknown;
     for (let i = 0; i < order.length && !response; i++) {
@@ -95,7 +96,7 @@ export const smartDistributeSongs = async (
         lastError = e;
         console.warn(`${order[i]} failed (attempt ${i + 1}):`, e);
         if (!/503|429|overloaded|high demand|unavailable|timeout|fetch/i.test(String((e as any)?.message || e))) break;
-        await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
     if (!response) throw lastError;
@@ -163,9 +164,11 @@ export const optimizeSetlistFlow = async (
     const sorted: string[] = (result.sortedIds || []).filter((id: string) => valid.has(id));
     // Never lose a song if the model skipped one.
     const missing = songs.map(s => s.id).filter(id => !sorted.includes(id));
-    return sorted.length ? [...sorted, ...missing] : songs.map(s => s.id);
+    if (!sorted.length) throw new Error('The AI returned no order.');
+    return [...sorted, ...missing];
   } catch (error) {
-    return songs.map(s => s.id);
+    // The caller falls back to the built-in ordering.
+    throw error;
   }
 };
 
