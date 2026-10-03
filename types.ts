@@ -43,11 +43,21 @@ export interface SetlistSnapshot {
   columnOrder: string[];
 }
 
+/** A named copy of the whole song library (with keys and lyrics) that can be updated, reloaded or exported. */
+export interface SongListSnapshot {
+  id: string;
+  name: string;
+  timestamp: number;
+  songs: Song[];
+}
+
 export interface BoardData {
   songs: Record<string, Song>;
   columns: Record<string, SetlistColumn>;
   columnOrder: string[];
   history: SetlistSnapshot[];
+  /** Saved song lists (song library snapshots). */
+  songLists?: SongListSnapshot[];
   config: GeneratorConfig;
 }
 

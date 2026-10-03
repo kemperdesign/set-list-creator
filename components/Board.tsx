@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
-import { BoardData, Song, EraPreference, SetlistSnapshot } from '../types';
+import { BoardData, Song, EraPreference, SetlistSnapshot, SongListSnapshot } from '../types';
 import SetlistColumn from './SetlistColumn';
 import FileUpload, { downloadTemplate } from './FileUpload';
 import SongSheet from './SongSheet';
@@ -17,7 +17,7 @@ import { COMMON_KEYS, countKeyChanges, formatKey, groupSongIdsByKey } from '../l
 import { downloadTextFile, exportSongsCsv, normalizeDuration } from '../lib/csv';
 import { printSongs } from '../lib/shareSong';
 import {
-  Disc3, FileText, RotateCcw, Layers, Plus, Wand2, Sparkles, Loader2, Music2, Music, Users2,
+  Disc3, ListMusic, FileText, RotateCcw, Layers, Plus, Wand2, Sparkles, Loader2, Music2, Music, Users2,
   History, Save, Trash2, ChevronLeft, ChevronDown, Menu, Cloud, CloudOff, Wifi, Download,
   Upload, Printer, Share2, LogOut, FileSpreadsheet,
 } from 'lucide-react';
@@ -64,6 +64,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
 
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isListsOpen, setIsListsOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [isToolsOpen, setIsToolsOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
@@ -358,6 +359,79 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     setData(prev => ({ ...prev, history: prev.history.filter(s => s.id !== id) }));
   };
 
+  // ── Saved song lists (library snapshots, per band) ─────────────────────────
+  const songLists: SongListSnapshot[] = data.songLists || [];
+
+  const saveSongList = async () => {
+    const all = Object.values(data.songs);
+    if (all.length === 0) { await showAlert('No songs yet', 'Add or import songs first, then save them as a song list.'); return; }
+    const name = await showPrompt('Save song list', `Name this list of ${all.length} songs (keys and lyrics are included):`, `Song list ${new Date().toLocaleDateString()}`);
+    if (!name) return;
+    const snap: SongListSnapshot = { id: uid('list'), name, timestamp: Date.now(), songs: JSON.parse(JSON.stringify(all)) };
+    setData(prev => ({ ...prev, songLists: [snap, ...(prev.songLists || [])] }));
+  };
+
+  const updateSongList = async (id: string) => {
+    const snap = songLists.find(l => l.id === id);
+    if (!snap) return;
+    const all = Object.values(data.songs);
+    const ok = await showConfirm('Update song list', `Replace "${snap.name}" with the current ${all.length} songs?`, { confirmLabel: 'Update' });
+    if (!ok) return;
+    setData(prev => ({
+      ...prev,
+      songLists: (prev.songLists || []).map(l => l.id === id ? { ...l, timestamp: Date.now(), songs: JSON.parse(JSON.stringify(Object.values(prev.songs))) } : l),
+    }));
+  };
+
+  /** Adds songs from a saved list that are not already in the library (matched by title). Nothing is replaced. */
+  const addSongList = async (id: string) => {
+    const snap = songLists.find(l => l.id === id);
+    if (!snap) return;
+    const have = new Set(Object.values(data.songs).map(s => titleKey(s.title)));
+    const fresh = snap.songs.filter(s => !have.has(titleKey(s.title)));
+    if (fresh.length === 0) { await showAlert('Nothing to add', 'Every song in this list is already in your library.'); return; }
+    setData(prev => {
+      const songs = { ...prev.songs };
+      const ids: string[] = [];
+      fresh.forEach(s => { const nid = uid('s'); songs[nid] = { ...s, id: nid }; ids.push(nid); });
+      return { ...prev, songs, columns: { ...prev.columns, pool: { ...prev.columns.pool, songIds: [...prev.columns.pool.songIds, ...ids] } } };
+    });
+    setIsListsOpen(false);
+    await showAlert('Songs added', `${fresh.length} song${fresh.length === 1 ? '' : 's'} added to the Song Library.`);
+  };
+
+  /** Replaces the whole library and empties the sets with the songs from a saved list. */
+  const loadSongList = async (id: string) => {
+    const snap = songLists.find(l => l.id === id);
+    if (!snap) return;
+    const ok = await showConfirm('Load song list', `Replace your current library (${Object.keys(data.songs).length} songs) and empty the sets with "${snap.name}" (${snap.songs.length} songs)? Tip: save the current library as a song list first if you want to keep it.`, { confirmLabel: 'Load list', danger: true });
+    if (!ok) return;
+    setData(prev => {
+      const base = makeInitialData();
+      const songs: Record<string, Song> = {};
+      const ids: string[] = [];
+      snap.songs.forEach(s => { const nid = uid('s'); songs[nid] = { ...s, id: nid }; ids.push(nid); });
+      return { ...prev, songs, columns: { ...base.columns, pool: { ...base.columns.pool, songIds: ids } }, columnOrder: base.columnOrder };
+    });
+    setIsListsOpen(false);
+  };
+
+  const exportSongList = (id: string, format: 'csv' | 'json') => {
+    const snap = songLists.find(l => l.id === id);
+    if (!snap) return;
+    const file = snap.name.replace(/[^\w-]+/g, '_') || 'song-list';
+    if (format === 'csv') downloadTextFile(`${file}.csv`, exportSongsCsv(snap.songs));
+    else downloadTextFile(`${file}.json`, JSON.stringify({ name: snap.name, songs: snap.songs }, null, 2), 'application/json');
+  };
+
+  const deleteSongList = async (id: string) => {
+    const snap = songLists.find(l => l.id === id);
+    if (!snap) return;
+    const ok = await showConfirm('Delete song list', `Delete the saved list "${snap.name}"? Your current library is not affected.`, { danger: true, confirmLabel: 'Delete' });
+    if (!ok) return;
+    setData(prev => ({ ...prev, songLists: (prev.songLists || []).filter(l => l.id !== id) }));
+  };
+
   // ── AI ─────────────────────────────────────────────────────────────────────
   const handleSmartPlan = async () => {
     if (isSmartPlanning) return;
@@ -609,36 +683,28 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     printSongs(ordered, false, 15);
   };
 
-  /** Sends every song in the sets back to the Song Library (nothing is deleted). */
-  const clearSets = async () => {
-    setIsToolsOpen(false);
-    const inSets = setIds.reduce((n, id) => n + data.columns[id].songIds.length, 0);
-    if (inSets === 0) {
-      await showAlert('Sets are already empty', 'There are no songs in your sets.');
-      return;
-    }
-    const ok = await showConfirm('Clear sets', `Move all ${inSets} songs in your sets back to the Song Library? Tip: tap Save first if you want to keep this arrangement.`, { confirmLabel: 'Clear sets' });
-    if (!ok) return;
-    setData(prev => {
-      const columns = { ...prev.columns };
-      let returned: string[] = [];
-      prev.columnOrder.filter(id => id.startsWith('setlist')).forEach(id => {
-        returned = [...returned, ...columns[id].songIds];
-        columns[id] = { ...columns[id], songIds: [] };
-      });
-      columns.pool = { ...columns.pool, songIds: [...columns.pool.songIds, ...returned.filter(id => !columns.pool.songIds.includes(id))] };
-      return { ...prev, columns };
-    });
-  };
-
+  /** Back to the default look: two empty sets, every song back in the Song Library. Nothing is deleted. */
   const handleReset = async () => {
     setIsToolsOpen(false);
     const ok = await showConfirm(
-      'Reset band',
-      `Clear the whole library, lyrics and sets for "${band.name}"?${isLocal ? '' : ' Everyone who shares this band will see it cleared.'} This cannot be undone.`,
-      { danger: true, confirmLabel: 'Reset' }
+      'Reset sets',
+      'Put every song back in the Song Library and return to the default two empty sets? Your songs, lyrics and saved sets are kept. Tip: tap Save first if you want to keep this arrangement.',
+      { confirmLabel: 'Reset' }
     );
-    if (ok) setData(makeInitialData());
+    if (!ok) return;
+    const base = makeInitialData();
+    setData(prev => {
+      const all = new Set<string>();
+      const ordered: string[] = [];
+      const add = (ids: string[]) => ids.forEach(id => { if (prev.songs[id] && !all.has(id)) { all.add(id); ordered.push(id); } });
+      add(prev.columns.pool?.songIds || []);
+      Object.keys(prev.columns).filter(id => id !== 'pool').forEach(id => add(prev.columns[id]?.songIds || []));
+      Object.keys(prev.songs).forEach(id => add([id])); // any song that somehow sat in no column
+      const columns = { ...base.columns, pool: { ...base.columns.pool, songIds: ordered } };
+      return { ...prev, columns, columnOrder: base.columnOrder };
+    });
+    setSearchQuery('');
+    setActiveTab('pool');
   };
 
   const openSong = openSongId ? data.songs[openSongId] : undefined;
@@ -727,6 +793,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
         {setCountSelect}
         <button onClick={saveSnapshot} className={`${btn} text-indigo-400`}><Save className="w-3 h-3" /> Save</button>
         <button onClick={() => setIsHistoryOpen(true)} className={`${btn} text-amber-400`}><History className="w-3 h-3" /> History</button>
+        <button onClick={() => setIsListsOpen(true)} className={`${btn} text-teal-300`} title="Save, update, reload and export song lists"><ListMusic className="w-3 h-3" /> Song lists</button>
         <button onClick={() => setIsImportOpen(true)} className={`${btn} text-emerald-400`}><Upload className="w-3 h-3" /> Import</button>
         <button onClick={downloadTemplate} className={`${btn} text-emerald-400`}><Download className="w-3 h-3" /> Template</button>
         <button onClick={handleExportCsv} className={`${btn} text-gray-300`}><FileSpreadsheet className="w-3 h-3" /> CSV</button>
@@ -735,7 +802,6 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
         </button>
         <button onClick={handleExportPDF} className={`${btn} text-red-400`}><FileText className="w-3 h-3" /> PDF</button>
         <button onClick={printSetLyrics} className={`${btn} text-sky-400`}><Printer className="w-3 h-3" /> Lyrics</button>
-        <button onClick={clearSets} className={`${btn} text-amber-300`} title="Move every song in the sets back to the Song Library"><Layers className="w-3 h-3" /> Clear sets</button>
         <button onClick={handleReset} className={`${btn} text-gray-400 hover:!bg-red-900/30`}><RotateCcw className="w-3 h-3" /> Reset</button>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
@@ -960,6 +1026,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
             <section className="grid grid-cols-2 gap-2">
               {[
                 { icon: <Save className="w-4 h-4 text-indigo-400" />, text: 'Save sets', on: () => { setIsToolsOpen(false); saveSnapshot(); } },
+                { icon: <ListMusic className="w-4 h-4 text-teal-300" />, text: 'Song lists', on: () => { setIsToolsOpen(false); setIsListsOpen(true); } },
                 { icon: <History className="w-4 h-4 text-amber-400" />, text: 'History', on: () => { setIsToolsOpen(false); setIsHistoryOpen(true); } },
                 { icon: <Upload className="w-4 h-4 text-emerald-400" />, text: 'Import songs', on: () => { setIsToolsOpen(false); setIsImportOpen(true); } },
                 { icon: <Download className="w-4 h-4 text-emerald-400" />, text: 'CSV template', on: () => { setIsToolsOpen(false); downloadTemplate(); } },
@@ -968,8 +1035,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
                 { icon: <FileText className="w-4 h-4 text-red-400" />, text: 'Export PDF (sets only)', on: handleExportPDF },
                 { icon: <Printer className="w-4 h-4 text-sky-400" />, text: 'Print lyrics', on: printSetLyrics },
                 ...(!isLocal && band.isOwner ? [{ icon: <Share2 className="w-4 h-4 text-indigo-300" />, text: 'Share band', on: () => { setIsToolsOpen(false); setIsShareOpen(true); } }] : []),
-                { icon: <Layers className="w-4 h-4 text-amber-300" />, text: 'Clear sets (keep songs)', on: clearSets },
-                { icon: <RotateCcw className="w-4 h-4 text-gray-400" />, text: 'Reset band', on: handleReset },
+                { icon: <RotateCcw className="w-4 h-4 text-gray-400" />, text: 'Reset sets', on: handleReset },
               ].map(a => (
                 <button key={a.text} onClick={a.on} className="py-3 px-3 flex items-center gap-2 text-xs font-bold text-gray-100 bg-gray-800 hover:bg-gray-700 rounded-xl text-left">
                   {a.icon}{a.text}
@@ -1068,6 +1134,36 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
             </button>
             <p className="text-[11px] text-gray-500 text-center">Add lyrics afterwards by tapping the song.</p>
           </form>
+        </Sheet>
+      )}
+
+      {/* Song lists */}
+      {isListsOpen && (
+        <Sheet title={<><ListMusic className="w-4 h-4 text-teal-300" /> Song lists</>} onClose={() => setIsListsOpen(false)} wide>
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-gray-500">A song list is a saved copy of your whole library (artists, keys, BPM, lyrics). Save one, update it later, add its songs to another band, or export it as CSV or JSON.</p>
+            <button onClick={saveSongList} className="w-full py-3 bg-teal-600 hover:bg-teal-500 text-white text-xs font-black uppercase rounded-xl flex items-center justify-center gap-2">
+              <Save className="w-4 h-4" /> Save current library as a song list ({Object.keys(data.songs).length} songs)
+            </button>
+            {songLists.length === 0 ? (
+              <p className="text-center text-gray-500 text-xs py-6">No saved song lists yet.</p>
+            ) : songLists.map(l => (
+              <div key={l.id} className="bg-gray-800 border border-gray-700 p-3 rounded-xl space-y-2">
+                <div className="min-w-0">
+                  <h4 className="font-bold text-white text-sm truncate">{l.name}</h4>
+                  <p className="text-[11px] text-gray-500 mt-0.5">{l.songs.length} songs, {l.songs.filter(s => s.lyrics).length} with lyrics - {new Date(l.timestamp).toLocaleString()}</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => updateSongList(l.id)} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-100 text-[11px] font-black uppercase rounded-lg">Update</button>
+                  <button onClick={() => addSongList(l.id)} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black uppercase rounded-lg">Add songs</button>
+                  <button onClick={() => loadSongList(l.id)} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-100 text-[11px] font-black uppercase rounded-lg">Load (replace)</button>
+                  <button onClick={() => exportSongList(l.id, 'csv')} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-emerald-300 text-[11px] font-black uppercase rounded-lg">CSV</button>
+                  <button onClick={() => exportSongList(l.id, 'json')} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-emerald-300 text-[11px] font-black uppercase rounded-lg">JSON</button>
+                  <button onClick={() => deleteSongList(l.id)} aria-label="Delete" className="ml-auto p-2 text-gray-500 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                </div>
+              </div>
+            ))}
+          </div>
         </Sheet>
       )}
 

@@ -30,6 +30,7 @@ export const normalizeBoard = (raw: any): BoardData => {
     columns: { ...base.columns, ...(raw.columns || {}) },
     columnOrder: Array.isArray(raw.columnOrder) && raw.columnOrder.length ? raw.columnOrder : base.columnOrder,
     history: Array.isArray(raw.history) ? raw.history : [],
+    songLists: Array.isArray(raw.songLists) ? raw.songLists : [],
     config: { ...base.config, ...(raw.config || {}) },
   };
 };
