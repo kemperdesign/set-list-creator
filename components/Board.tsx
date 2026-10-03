@@ -371,9 +371,15 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
     setIds.forEach(id => { if (data.columns[id].targetDuration) setDurations[id] = data.columns[id].targetDuration!; });
 
     try {
-      const plan = await smartDistributeSongs(library, setIds, { ...data.config, setDurations });
-      if (Object.keys(plan).length === 0) {
-        await showAlert('Could not generate sets', 'The AI did not return a plan. Check your connection and Gemini API key, then try again.');
+      let plan: Record<string, string[]>;
+      try {
+        plan = await smartDistributeSongs(library, setIds, { ...data.config, setDurations });
+      } catch (e) {
+        await showAlert('Could not generate sets', e instanceof Error ? e.message : 'The AI request failed. Try again.');
+        return;
+      }
+      if (Object.values(plan).every(ids => ids.length === 0)) {
+        await showAlert('Could not generate sets', 'The AI answered but did not place any songs. Try again, or check that not every song is marked as excluded from AI (the wand icon).');
         return;
       }
       setData(prev => {

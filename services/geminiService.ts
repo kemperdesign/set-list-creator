@@ -68,19 +68,29 @@ export const smartDistributeSongs = async (
     };
   });
 
-  try {
-    const response = await ai.models.generateContent({
-      model: PRO_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: properties,
-          required: setlistIds
-        }
+  const request = (model: string) => ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: properties,
+        required: setlistIds
       }
-    });
+    }
+  });
+
+  try {
+    // The Pro model is best at planning but is also the one most likely to be busy, renamed or
+    // retired. If it fails for any reason, retry once with the Flash model before giving up.
+    let response;
+    try {
+      response = await request(PRO_MODEL);
+    } catch (proError) {
+      console.warn("Pro model failed, retrying with Flash:", proError);
+      response = await request(FLASH_MODEL);
+    }
 
     const result = JSON.parse(response.text || "{}");
     // Verify that the result only contains IDs that actually exist in the library
@@ -96,7 +106,8 @@ export const smartDistributeSongs = async (
     return cleanedResult;
   } catch (error) {
     console.error("Smart distribution failed:", error);
-    return {};
+    // Surface the real reason (bad key, quota, retired model...) instead of an empty plan.
+    throw new Error(describeAiError(error));
   }
 };
 
