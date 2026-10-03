@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react';
-import { Check, Lightbulb, LogOut, Music, Activity, Clock, AlignLeft, User, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, Lightbulb, Bell, LogOut, Music, Activity, Clock, AlignLeft, User, X } from 'lucide-react';
 import { BoardData, Song } from '../types';
 import { formatKey } from '../lib/keys';
+import { SongRequest } from '../lib/requests';
+import RequestsInbox from './RequestsInbox';
 
 interface Props {
   data: BoardData;
@@ -13,6 +15,11 @@ interface Props {
   lightsOn: boolean;
   onOpenSong: (songId: string) => void;
   onOpenLights: () => void;
+  requestsOn?: boolean;
+  requests?: SongRequest[];
+  requestAlert?: SongRequest | null;
+  onDismissAlert?: () => void;
+  onSetRequestStatus?: (ids: string[], status: 'played' | 'dismissed') => void;
   /** Leave stage mode. */
   onExit: () => void;
   /** Shown when stage mode was opened in its own window. */
@@ -23,7 +30,8 @@ interface Props {
  * Full-screen performance view: just the setlist, big tap targets. Tap a song to open it (lyrics or
  * your own chart, auto-scroll, metronome). When the song ends the sheet closes and this list is back.
  */
-const StageView: React.FC<Props> = ({ data, bandName, userEmail, playedIds, lastId, lightsOn, onOpenSong, onOpenLights, onExit, standalone }) => {
+const StageView: React.FC<Props> = ({ data, bandName, userEmail, playedIds, lastId, lightsOn, onOpenSong, onOpenLights, requestsOn, requests = [], requestAlert, onDismissAlert, onSetRequestStatus, onExit, standalone }) => {
+  const [showReq, setShowReq] = useState(false);
   const sets = data.columnOrder
     .filter(id => id.startsWith('setlist'))
     .map(id => ({ col: data.columns[id], songs: data.columns[id].songIds.map(sid => data.songs[sid]).filter(Boolean) as Song[] }))
@@ -49,6 +57,11 @@ const StageView: React.FC<Props> = ({ data, bandName, userEmail, playedIds, last
             Stage{userEmail ? <><User className="w-3 h-3" />{userEmail.split('@')[0]}</> : null}
           </p>
         </div>
+        {requestsOn && (
+          <button onClick={() => setShowReq(true)} className={`h-11 px-3 rounded-lg flex items-center gap-1.5 text-[11px] font-black uppercase ${requests.length ? 'bg-rose-500/20 text-rose-200' : 'bg-gray-800 text-gray-400'}`} title="Audience requests">
+            <Bell className="w-4 h-4" />Requests{requests.length ? ` (${requests.length})` : ''}
+          </button>
+        )}
         <button onClick={onOpenLights} className={`h-11 px-3 rounded-lg flex items-center gap-1.5 text-[11px] font-black uppercase ${lightsOn ? 'bg-yellow-500/15 text-yellow-300' : 'bg-gray-800 text-gray-400'}`} title="Lights and cues">
           <Lightbulb className="w-4 h-4" />{lightsOn ? 'Cues on' : 'Cues off'}
         </button>
@@ -56,6 +69,26 @@ const StageView: React.FC<Props> = ({ data, bandName, userEmail, playedIds, last
           {standalone ? <LogOut className="w-4 h-4" /> : <X className="w-4 h-4" />}{standalone ? 'Full app' : 'Exit'}
         </button>
       </header>
+
+      {requestAlert && !showReq && (
+        <button onClick={() => { onDismissAlert?.(); setShowReq(true); }} className="flex-shrink-0 w-full text-left px-4 py-3 bg-rose-600 text-white flex items-center gap-3 animate-pulse">
+          <Bell className="w-5 h-5 flex-shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-sm font-black">New request: {requestAlert.title}{requestAlert.artist ? ` - ${requestAlert.artist}` : ''}</span>
+          <span className="text-[11px] font-black uppercase">View</span>
+        </button>
+      )}
+
+      {showReq && (
+        <div className="absolute inset-0 z-10 bg-gray-950/95 flex flex-col" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+            <h2 className="text-base font-black text-white">Audience requests</h2>
+            <button onClick={() => setShowReq(false)} className="h-11 px-3 rounded-lg bg-gray-800 text-gray-200 text-[11px] font-black uppercase flex items-center gap-1.5"><X className="w-4 h-4" />Close</button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 max-w-3xl w-full mx-auto">
+            <RequestsInbox requests={requests} onSetStatus={(ids, st) => onSetRequestStatus?.(ids, st)} empty="No requests right now." />
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5">
         {sets.length === 0 ? (

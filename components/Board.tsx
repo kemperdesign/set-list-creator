@@ -7,6 +7,9 @@ import FileUpload, { downloadTemplate } from './FileUpload';
 import SongSheet from './SongSheet';
 import StageView from './StageView';
 import LightsSheet from './LightsSheet';
+import RequestsSheet from './RequestsSheet';
+import { publicSongList, SongRequest } from '../lib/requests';
+import { useRequests } from '../lib/useRequests';
 import { fireCue } from '../lib/cues';
 import Sheet from './Sheet';
 import ShareBandDialog from './ShareBandDialog';
@@ -22,7 +25,7 @@ import { printSongs } from '../lib/shareSong';
 import {
   Disc3, ListMusic, Lightbulb, MonitorPlay, FileText, RotateCcw, Layers, Plus, Wand2, Sparkles, Loader2, Music2, Music, Users2,
   History, Save, Trash2, ChevronLeft, ChevronDown, Menu, Cloud, CloudOff, Wifi, Download,
-  Upload, Printer, Share2, LogOut, FileSpreadsheet,
+  Upload, Printer, Share2, LogOut, FileSpreadsheet, QrCode,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -72,6 +75,9 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
   const [isListsOpen, setIsListsOpen] = useState(false);
   const [isStageOpen, setIsStageOpen] = useState(!!startInStage);
   const [isLightsOpen, setIsLightsOpen] = useState(false);
+  const [isRequestsOpen, setIsRequestsOpen] = useState(false);
+  const [reqEnabled, setReqEnabled] = useState(false);
+  const [reqAlert, setReqAlert] = useState<SongRequest | null>(null);
   const [playedIds, setPlayedIds] = useState<string[]>([]);
   const [lastPlayedId, setLastPlayedId] = useState<string | null>(null);
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -80,6 +86,50 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
   const [isSnapshotDropdownOpen, setIsSnapshotDropdownOpen] = useState(false);
   const [openSongId, setOpenSongId] = useState<string | null>(null);
   const [newSong, setNewSong] = useState<Partial<Song>>({ title: '', artist: '', vocalist: '', duration: '', key: '' });
+
+  // ── Audience requests ──────────────────────────────────────────────────────
+  const publishedJson = useRef('');
+  const refreshReqEnabled = useCallback(async () => {
+    if (isLocal || !supabase) return;
+    const { data: row, error } = await supabase.from('setlists').select('request_enabled').eq('id', band.id).maybeSingle();
+    if (!error) setReqEnabled(!!row?.request_enabled);
+  }, [band.id, isLocal]);
+  useEffect(() => { refreshReqEnabled(); }, [refreshReqEnabled]);
+
+  // Keep the audience's pick-list in step with the library and sets (only while requests are on).
+  useEffect(() => {
+    if (isLocal || !supabase || !reqEnabled) return;
+    const t = window.setTimeout(async () => {
+      const list = publicSongList(dataRef.current);
+      const json = JSON.stringify(list);
+      if (json === publishedJson.current) return;
+      const { error } = await supabase!.from('setlists').update({ public_songs: list }).eq('id', band.id);
+      if (!error) publishedJson.current = json;
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [data.songs, data.columns, reqEnabled, isLocal, band.id]);
+
+  const beep = () => {
+    try {
+      const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new Ctor();
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.frequency.value = 880; g.gain.value = 0.15;
+      o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.18);
+      setTimeout(() => ctx.close().catch(() => {}), 400);
+    } catch { /* sound is optional */ }
+  };
+  const onNewRequest = useCallback((r: SongRequest) => {
+    setReqAlert(r);
+    try { navigator.vibrate?.([200, 100, 200]); } catch { /* not supported */ }
+    beep();
+  }, []);
+  const { requests: openRequests, setStatus: setRequestStatus } = useRequests(band.id, isStageOpen && !isLocal && reqEnabled, onNewRequest);
+  useEffect(() => {
+    if (!reqAlert) return;
+    const t = window.setTimeout(() => setReqAlert(null), 9000);
+    return () => window.clearTimeout(t);
+  }, [reqAlert]);
 
   // ── Sync bookkeeping ───────────────────────────────────────────────────────
   const dataRef = useRef(data);
@@ -870,6 +920,7 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
         <button onClick={() => setIsHistoryOpen(true)} className={`${btn} text-amber-400`}><History className="w-3 h-3" /> History</button>
         <button onClick={openStageWindow} className={`${btn} text-sky-300`} title="Performance view in its own window"><MonitorPlay className="w-3 h-3" /> Stage</button>
         <button onClick={() => setIsLightsOpen(true)} className={`${btn} text-yellow-300`} title="Lighting and recording cues"><Lightbulb className="w-3 h-3" /> Lights</button>
+        {!isLocal && <button onClick={() => setIsRequestsOpen(true)} className={`${btn} text-rose-300`} title="Audience song requests and QR code"><QrCode className="w-3 h-3" /> Requests</button>}
         <button onClick={() => setIsListsOpen(true)} className={`${btn} text-teal-300`} title="Save, update, reload and export song lists"><ListMusic className="w-3 h-3" /> Song lists</button>
         <button onClick={() => setIsImportOpen(true)} className={`${btn} text-emerald-400`}><Upload className="w-3 h-3" /> Import</button>
         <button onClick={downloadTemplate} className={`${btn} text-emerald-400`}><Download className="w-3 h-3" /> Template</button>
@@ -1080,9 +1131,18 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
           lightsOn={!!data.integrations?.webhookEnabled && !!data.integrations?.webhookUrl}
           onOpenSong={openFromStage}
           onOpenLights={() => setIsLightsOpen(true)}
+          requestsOn={reqEnabled && !isLocal}
+          requests={openRequests}
+          requestAlert={reqAlert}
+          onDismissAlert={() => setReqAlert(null)}
+          onSetRequestStatus={setRequestStatus}
           onExit={() => { if (startInStage) { window.location.href = window.location.origin + '/'; } else setIsStageOpen(false); }}
           standalone={!!startInStage}
         />
+      )}
+
+      {isRequestsOpen && (
+        <RequestsSheet bandId={band.id} bandName={band.name} onClose={() => { setIsRequestsOpen(false); refreshReqEnabled(); }} />
       )}
 
       {isLightsOpen && (
@@ -1134,6 +1194,7 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
                 { icon: <Save className="w-4 h-4 text-indigo-400" />, text: 'Save sets', on: () => { setIsToolsOpen(false); saveSnapshot(); } },
                 { icon: <MonitorPlay className="w-4 h-4 text-sky-300" />, text: 'Stage mode', on: openStageWindow },
                 { icon: <Lightbulb className="w-4 h-4 text-yellow-300" />, text: 'Lights and cues', on: () => { setIsToolsOpen(false); setIsLightsOpen(true); } },
+                ...(!isLocal ? [{ icon: <QrCode className="w-4 h-4 text-rose-300" />, text: 'Song requests (QR)', on: () => { setIsToolsOpen(false); setIsRequestsOpen(true); } }] : []),
                 { icon: <ListMusic className="w-4 h-4 text-teal-300" />, text: 'Song lists', on: () => { setIsToolsOpen(false); setIsListsOpen(true); } },
                 { icon: <History className="w-4 h-4 text-amber-400" />, text: 'History', on: () => { setIsToolsOpen(false); setIsHistoryOpen(true); } },
                 { icon: <Upload className="w-4 h-4 text-emerald-400" />, text: 'Import songs', on: () => { setIsToolsOpen(false); setIsImportOpen(true); } },

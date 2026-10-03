@@ -7,6 +7,16 @@ import { BandSummary } from './types';
 import AuthScreen from './components/AuthScreen';
 import BandManager from './components/BandManager';
 import Board, { LOCAL_BAND_ID } from './components/Board';
+import RequestPage from './components/RequestPage';
+
+/** Audience request link: requests.auggystyle.com/<code>, /?b=<code> or /r/<code>. */
+const getRequestCode = (): { isRequests: boolean; code: string | null } => {
+  const u = new URL(window.location.href);
+  const parts = u.pathname.split('/').filter(Boolean);
+  const onHost = window.location.hostname.startsWith('requests.');
+  const code = u.searchParams.get('b') || (parts[0] === 'r' ? parts[1] : onHost ? parts[0] : null) || null;
+  return { isRequests: onHost || parts[0] === 'r' || !!u.searchParams.get('b'), code };
+};
 
 /**
  * Flow:
@@ -15,6 +25,9 @@ import Board, { LOCAL_BAND_ID } from './components/Board';
  *   signed in             -> BandManager (pick or create a band) -> Board for that band
  */
 const App: React.FC = () => {
+  const req = getRequestCode();
+  if (req.isRequests) return <RequestPage code={req.code} />;
+
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!supabase);
   const [recovery, setRecovery] = useState(false);
