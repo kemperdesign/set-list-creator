@@ -217,8 +217,10 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
   const colSongs = (id: string): Song[] =>
     (data.columns[id]?.songIds || []).map(sid => data.songs[sid]).filter((s): s is Song => !!s);
 
+  // The Song Library is always shown A-Z by title (ignoring a leading "The", "A" or "An").
+  const sortKey = (t: string) => t.trim().replace(/^(the|a|an)\s+/i, '').replace(/^[^\p{L}\p{N}]+/u, '').toLowerCase();
   const filteredLibrary = (): Song[] => {
-    const all = colSongs('pool');
+    const all = [...colSongs('pool')].sort((a, b) => sortKey(a.title).localeCompare(sortKey(b.title), undefined, { numeric: true, sensitivity: 'base' }));
     const q = searchQuery.trim().toLowerCase();
     if (!q) return all;
     return all.filter(s =>
@@ -627,7 +629,9 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
 
     // While searching, the library shows only some songs, so the indexes react-dnd reports are
     // positions in the filtered list. Translate them back to real positions.
-    const visiblePool = searchQuery.trim() ? filteredLibrary().map(s => s.id) : null;
+    const visiblePool = filteredLibrary().map(s => s.id);
+    // The library is sorted automatically, so dragging inside it does nothing.
+    if (source.droppableId === 'pool' && destination.droppableId === 'pool') return;
 
     setData(prev => {
       const start = prev.columns[source.droppableId];
@@ -738,7 +742,7 @@ const Board: React.FC<BoardProps> = ({ band, userEmail, onBack, onSignOut }) => 
 
   const openSong = openSongId ? data.songs[openSongId] : undefined;
   const openSongColumn = openSongId ? columnOfSong(openSongId) : null;
-  const siblings = openSongColumn ? data.columns[openSongColumn].songIds : [];
+  const siblings = openSongColumn === 'pool' ? filteredLibrary().map(s => s.id) : openSongColumn ? data.columns[openSongColumn].songIds : [];
   const openIdx = openSongId ? siblings.indexOf(openSongId) : -1;
   const destinations = [
     { id: 'pool', title: 'Song Library' },
