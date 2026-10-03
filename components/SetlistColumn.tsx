@@ -85,8 +85,8 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
                 <Trash2 className={mobile ? 'w-4 h-4' : 'w-3.5 h-3.5'} />
               </button>
             )}
-            <span className="text-[10px] font-mono bg-gray-900 px-1.5 py-0.5 rounded text-gray-400">
-              {songs.length}
+            <span className="text-[11px] font-bold bg-gray-900 px-2 py-0.5 rounded-full text-gray-200 whitespace-nowrap">
+              {songs.length} {songs.length === 1 ? 'song' : 'songs'}
             </span>
           </div>
         </div>
@@ -183,6 +183,12 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
             </div>
           )}
         </Droppable>
+      </div>
+
+      {/* Footer: always visible, even when the list is scrolled */}
+      <div className="flex-shrink-0 flex items-center justify-between px-3 py-2 border-t border-gray-800 bg-gray-900/80 text-[11px] font-semibold text-gray-300">
+        <span>{songs.length} {songs.length === 1 ? 'song' : 'songs'}</span>
+        <span className="flex items-center gap-1 text-gray-400"><Clock className="w-3 h-3" />{currentDuration}m{column.targetDuration ? ` / ${column.targetDuration}m` : ''}</span>
       </div>
     </div>
   );
