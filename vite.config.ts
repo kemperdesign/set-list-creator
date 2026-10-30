@@ -12,8 +12,8 @@ export default defineConfig(({ mode }) => {
       plugins: [react()],
       define: {
         'process.env.VITE_GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY),
-        'process.env.VITE_OPENAI_API_KEY': JSON.stringify(env.VITE_OPENAI_API_KEY || ''),
-        'process.env.VITE_OPENAI_MODEL': JSON.stringify(env.VITE_OPENAI_MODEL || '')
+        'process.env.VITE_OPENAI_API_KEY': JSON.stringify(env.VITE_OPENAI_API_KEY || env.OPENAI_API_KEY || ''),
+        'process.env.VITE_OPENAI_MODEL': JSON.stringify(env.VITE_OPENAI_MODEL || env.OPENAI_MODEL || '')
       },
       resolve: {
         alias: {
