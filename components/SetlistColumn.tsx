@@ -3,7 +3,7 @@ import React from 'react';
 import { Droppable } from '@hello-pangea/dnd';
 import { SetlistColumn as ColumnType, Song } from '../types';
 import SongCard from './SongCard';
-import { Sparkles, Plus, Clock, Target, Music, Trash2 } from 'lucide-react';
+import { Sparkles, Plus, Clock, Target, Music, Trash2, Mic2 } from 'lucide-react';
 
 interface SetlistColumnProps {
   column: ColumnType;
@@ -20,6 +20,8 @@ interface SetlistColumnProps {
   onDeleteSet?: (columnId: string) => void;
   /** Reorders the set so songs in the same key sit together (fewer instrument changes). */
   onGroupKeys?: (columnId: string) => void;
+  /** Reorders the set so the lead singer changes on every song (songs stay in the set). */
+  onAlternateSingers?: (columnId: string) => void;
   /** How many key changes the current order has (shown next to the button). */
   keyChanges?: number;
   mobile?: boolean;
@@ -39,6 +41,7 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
   onDeleteSong,
   onDeleteSet,
   onGroupKeys,
+  onAlternateSingers,
   keyChanges,
   mobile,
   className
@@ -125,15 +128,25 @@ const SetlistColumn: React.FC<SetlistColumnProps> = ({
             ) : null}
 
              {isSet && songs.length >= 2 && (
-               <div className="flex gap-1.5 mt-1">
+               <div className="flex flex-wrap gap-1.5 mt-1">
                  <button
                     onClick={() => onOptimize(column.id)}
                     disabled={isOptimizing}
-                    className={`flex-1 ${mobile ? 'py-2 text-xs' : 'py-1 text-[10px]'} flex items-center justify-center gap-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 rounded transition-all disabled:opacity-50`}
+                    className={`flex-1 min-w-[110px] ${mobile ? 'py-2 text-xs' : 'py-1 text-[10px]'} flex items-center justify-center gap-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 border border-indigo-500/20 rounded transition-all disabled:opacity-50`}
                  >
                     <Sparkles className={`w-2.5 h-2.5 ${isOptimizing ? 'animate-spin' : ''}`} />
                     {isOptimizing ? 'Optimizing…' : 'Auto-Optimize Flow'}
                  </button>
+                 {onAlternateSingers && (
+                   <button
+                      onClick={() => onAlternateSingers(column.id)}
+                      className={`${mobile ? 'py-2 px-3 text-xs' : 'py-1 px-2 text-[10px]'} flex items-center justify-center gap-1 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 border border-sky-500/20 rounded transition-all`}
+                      title="Reorder this set so the lead singer alternates on every song"
+                   >
+                      <Mic2 className="w-2.5 h-2.5" />
+                      Alternate singers
+                   </button>
+                 )}
                  {onGroupKeys && (
                    <button
                       onClick={() => onGroupKeys(column.id)}

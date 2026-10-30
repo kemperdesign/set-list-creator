@@ -14,6 +14,7 @@ import { fireCue } from '../lib/cues';
 import Sheet from './Sheet';
 import ShareBandDialog from './ShareBandDialog';
 import { optimizeSetlistFlow, getSongDetails, enrichSongs, describeAiError, smartDistributeSongs } from '../services/geminiService';
+import { alternateSingers, hasSingers } from '../lib/singers';
 import { planSetsLocally, orderSetLocally } from '../lib/localPlanner';
 import { supabase } from '../lib/supabase';
 import { STORAGE_KEY, makeInitialData, normalizeBoard, titleKey, uid } from '../lib/boardData';
@@ -352,6 +353,20 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
       });
       return { ...prev, songs, columns };
     });
+  };
+
+  const handleAlternateSingers = async (columnId: string) => {
+    const ids = data.columns[columnId]?.songIds || [];
+    if (!hasSingers(ids, data.songs)) {
+      await showAlert('No singers yet', 'None of the songs in this set have a singer. Tap a song, open Details and add its vocalist (or import a CSV with a Vocalist column).');
+      return;
+    }
+    const res = alternateSingers(ids, data.songs);
+    setData(prev => ({
+      ...prev,
+      columns: { ...prev.columns, [columnId]: { ...prev.columns[columnId], songIds: res.ids } },
+    }));
+    if (res.clashes > 0) await showAlert('Mostly alternated', `${res.clashes} back-to-back repeat${res.clashes === 1 ? '' : 's'} could not be avoided because one singer has more than half the songs in this set. Every song is still in the set.`);
   };
 
   const handleGroupKeys = async (columnId: string) => {
@@ -978,7 +993,7 @@ const Board: React.FC<BoardProps> = ({ band, startInStage, userEmail, onBack, on
     ...(id.startsWith('setlist') ? { onDeleteSet: deleteSet } : {}),
     mobile: !isDesktop,
     ...(id.startsWith('setlist')
-      ? { onUpdateTargetDuration: handleUpdateTargetDuration, onGroupKeys: handleGroupKeys, keyChanges: keyChangesFor(id) }
+      ? { onUpdateTargetDuration: handleUpdateTargetDuration, onGroupKeys: handleGroupKeys, onAlternateSingers: handleAlternateSingers, keyChanges: keyChangesFor(id) }
       : {}),
     ...(id === 'pool' ? { onAddSong: () => setIsAddOpen(true) } : {}),
   });
