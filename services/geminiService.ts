@@ -10,6 +10,76 @@ const ai = new GoogleGenAI({ apiKey: process.env.VITE_GEMINI_API_KEY || '' });
 const PRO_MODEL = "gemini-3.1-pro-preview";
 const FLASH_MODEL = "gemini-3.6-flash";
 
+// Backup provider: if Gemini fails (busy, quota, retired model, bad key) every AI call is retried on
+// OpenAI. Set VITE_OPENAI_API_KEY in Vercel (and optionally VITE_OPENAI_MODEL) to turn it on.
+const OPENAI_KEY = process.env.VITE_OPENAI_API_KEY || '';
+const OPENAI_MODEL = process.env.VITE_OPENAI_MODEL || 'gpt-4o-mini';
+const GEMINI_KEY = process.env.VITE_GEMINI_API_KEY || '';
+const TRANSIENT = /503|429|overloaded|high demand|unavailable|timeout|fetch/i;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+const callOpenAI = async (prompt: string, schema: any, temperature?: number): Promise<any> => {
+  const shape = JSON.stringify(schema).replace(/"type":"([A-Z]+)"/g, (_m, t) => `"type":"${t.toLowerCase()}"`);
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_KEY}` },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      response_format: { type: 'json_object' },
+      ...(temperature !== undefined && /gpt-4/.test(OPENAI_MODEL) ? { temperature } : {}),
+      messages: [
+        { role: 'system', content: 'You are a precise assistant. Reply with a single JSON object only.' },
+        { role: 'user', content: `${prompt}\n\nReturn JSON matching this JSON schema exactly:\n${shape}` },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.error?.message || ''; } catch { /* ignore */ }
+    throw new Error(`OpenAI ${res.status}: ${detail || res.statusText}`);
+  }
+  const body = await res.json();
+  return JSON.parse(body?.choices?.[0]?.message?.content || '{}');
+};
+
+/**
+ * One JSON answer from the AI. Tries the given Gemini models in order (waiting briefly when Google is
+ * busy), then falls back to OpenAI if a key is configured. Throws only if every provider failed.
+ */
+const aiJson = async (prompt: string, schema: any, models: string[], temperature?: number): Promise<any> => {
+  let lastError: unknown;
+  if (GEMINI_KEY) {
+    for (let i = 0; i < models.length; i++) {
+      try {
+        const response = await ai.models.generateContent({
+          model: models[i],
+          contents: prompt,
+          config: { responseMimeType: 'application/json', responseSchema: schema, ...(temperature !== undefined ? { temperature } : {}) },
+        });
+        return JSON.parse(response.text || '{}');
+      } catch (e) {
+        lastError = e;
+        console.warn(`${models[i]} failed (attempt ${i + 1}):`, e);
+        if (i < models.length - 1) {
+          // Temporary overload: wait and retry. Anything else (bad key, retired model): try the next model right away.
+          if (TRANSIENT.test(String((e as any)?.message || e))) await sleep(1500);
+        }
+      }
+    }
+  } else {
+    lastError = new Error('No AI key is configured for this site (VITE_GEMINI_API_KEY or VITE_OPENAI_API_KEY in Vercel).');
+  }
+  if (OPENAI_KEY) {
+    try {
+      return await callOpenAI(prompt, schema, temperature);
+    } catch (e) {
+      console.warn('OpenAI backup failed:', e);
+      throw new Error(`Gemini: ${describeAiError(lastError)} OpenAI backup: ${String((e as any)?.message || e)}`);
+    }
+  }
+  throw lastError;
+};
+
 export const smartDistributeSongs = async (
   library: Song[],
   setlistIds: string[],
@@ -68,40 +138,12 @@ export const smartDistributeSongs = async (
     };
   });
 
-  const request = (model: string) => ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: properties,
-        required: setlistIds
-      }
-    }
-  });
+  const schema = { type: Type.OBJECT, properties: properties, required: setlistIds };
 
   try {
-    // The Pro model is best at planning but is also the one most likely to be busy, renamed or
-    // retired. If it fails for any reason, retry once with the Flash model before giving up.
-    // "503 high demand" is temporary, so wait and retry a few times, alternating models.
-    // Kept short: the app has a built-in planner as the final fallback, so the person never waits long.
-    const order = [PRO_MODEL, FLASH_MODEL, FLASH_MODEL];
-    let response;
-    let lastError: unknown;
-    for (let i = 0; i < order.length && !response; i++) {
-      try {
-        response = await request(order[i]);
-      } catch (e) {
-        lastError = e;
-        console.warn(`${order[i]} failed (attempt ${i + 1}):`, e);
-        if (!/503|429|overloaded|high demand|unavailable|timeout|fetch/i.test(String((e as any)?.message || e))) break;
-        await new Promise(r => setTimeout(r, 1500));
-      }
-    }
-    if (!response) throw lastError;
-
-    const result = JSON.parse(response.text || "{}");
+    // Pro is best at planning but is also the one most likely to be busy or retired, so Flash is the
+    // backup, then OpenAI. The app also has a built-in planner as the final fallback.
+    const result = await aiJson(prompt, schema, [PRO_MODEL, FLASH_MODEL, FLASH_MODEL]);
     // Verify that the result only contains IDs that actually exist in the library
     const validIds = new Set(eligibleSongs.map(s => s.id));
     const cleanedResult: Record<string, string[]> = {};
@@ -147,19 +189,11 @@ export const optimizeSetlistFlow = async (
   Return JSON { "sortedIds": [...] } using only the exact IDs given, each exactly once.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: PRO_MODEL,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: { sortedIds: { type: Type.ARRAY, items: { type: Type.STRING } } },
-          required: ["sortedIds"]
-        }
-      }
-    });
-    const result = JSON.parse(response.text || "{}");
+    const result = await aiJson(prompt, {
+      type: Type.OBJECT,
+      properties: { sortedIds: { type: Type.ARRAY, items: { type: Type.STRING } } },
+      required: ["sortedIds"]
+    }, [PRO_MODEL, FLASH_MODEL]);
     const valid = new Set(songs.map(s => s.id));
     const sorted: string[] = (result.sortedIds || []).filter((id: string) => valid.has(id));
     // Never lose a song if the model skipped one.
@@ -175,8 +209,8 @@ export const optimizeSetlistFlow = async (
 /** Friendly message for the errors people actually hit (missing key, retired model, quota). */
 export const describeAiError = (error: unknown): string => {
   const msg = error instanceof Error ? error.message : String(error);
-  if (!process.env.VITE_GEMINI_API_KEY) {
-    return 'No Gemini API key is configured for this site (VITE_GEMINI_API_KEY in Vercel).';
+  if (!GEMINI_KEY && !OPENAI_KEY) {
+    return 'No AI key is configured for this site (VITE_GEMINI_API_KEY or VITE_OPENAI_API_KEY in Vercel).';
   }
   if (/API key|API_KEY|permission|403|401/i.test(msg)) return 'Google rejected the Gemini API key. Check that VITE_GEMINI_API_KEY is valid.';
   if (/404|not found|no longer available|deprecated/i.test(msg)) return 'The AI model name is out of date. It needs updating in services/geminiService.ts.';
@@ -227,13 +261,7 @@ Rules:
 Songs: ${JSON.stringify(batch.map(s => ({ id: s.id, title: s.title, artist: s.artist || 'Unknown Artist', key: s.key, bpm: s.bpm, duration: s.duration, year: s.year })))}`;
 
     try {
-      const response = await ai.models.generateContent({
-        model: FLASH_MODEL,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.2,
-          responseSchema: {
+      const parsed = await aiJson(prompt, {
             type: Type.OBJECT,
             properties: {
               songs: {
@@ -253,10 +281,7 @@ Songs: ${JSON.stringify(batch.map(s => ({ id: s.id, title: s.title, artist: s.ar
               }
             },
             required: ["songs"]
-          }
-        }
-      });
-      const parsed = JSON.parse(response.text || "{}");
+          }, [FLASH_MODEL, FLASH_MODEL], 0.2);
       const valid = new Set(batch.map(s => s.id));
       (parsed.songs || []).forEach((row: any) => {
         if (row && valid.has(row.id)) {
@@ -283,12 +308,7 @@ export const getSongDetails = async (title: string, artist?: string): Promise<Pa
 export const generateSampleData = async (): Promise<Song[]> => {
   const prompt = `Generate 15 popular songs (Title, Artist, Key (e.g. "G", "F#m"), BPM, Duration (e.g. 3:45), Vocalist, Year (1950-2024)). Return JSON.`;
   try {
-      const response = await ai.models.generateContent({
-          model: FLASH_MODEL,
-          contents: prompt,
-          config: {
-              responseMimeType: "application/json",
-              responseSchema: {
+      const data = await aiJson(prompt, {
                   type: Type.OBJECT,
                   properties: {
                       songs: {
@@ -310,10 +330,7 @@ export const generateSampleData = async (): Promise<Song[]> => {
                       }
                   },
                   required: ["songs"]
-              }
-          }
-      });
-      const data = JSON.parse(response.text || "{}");
+              }, [FLASH_MODEL]);
       return (data.songs || []).map((s: any, i: number) => ({
         ...s,
         id: `gen-${i}-${Date.now()}`,
